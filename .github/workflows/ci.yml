@@ -25,3 +25,11 @@ jobs:
         run: npx wrangler deploy --dry-run --outdir .wrangler-build
         env:
           WRANGLER_SEND_METRICS: 'false'
+      - name: Real WebSocket multiplayer smoke test
+        run: |
+          npx wrangler dev --local --ip 127.0.0.1 --port 8787 > /tmp/doodledash-worker.log 2>&1 &
+          worker_pid=$!
+          trap 'kill "$worker_pid" || true; cat /tmp/doodledash-worker.log' EXIT
+          node test/smoke.mjs
+        env:
+          WRANGLER_SEND_METRICS: 'false'
