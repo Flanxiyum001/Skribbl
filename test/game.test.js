@@ -1,14 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
-
-const path = new URL('../src/room.js', import.meta.url);
-const wordsURL = new URL('../src/words.js', import.meta.url).href;
-const source = readFileSync(path, 'utf8')
-  .replace("import { DurableObject } from 'cloudflare:workers';", 'class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }')
-  .replace("from './words.js'", `from '${wordsURL}'`);
-const { GameRoom } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+import { GameRoom } from '../src/room.js';
 class FakeSocket {
   messages = []; attached = null;
   send(data) { this.messages.push(JSON.parse(data)); }

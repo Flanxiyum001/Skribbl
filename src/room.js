@@ -1,4 +1,4 @@
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject } from './durable-shim.js';
 import { pickWords, normalizeGuess, hiddenWord } from './words.js';
 
 const MAX_PLAYERS = 12;

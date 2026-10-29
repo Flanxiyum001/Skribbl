@@ -1,7 +1,8 @@
-// End-to-end smoke test against a real `wrangler dev` server, using Node 22's WebSocket.
+// End-to-end smoke test against the Render-compatible Node WebSocket server.
 import assert from 'node:assert/strict';
 
-const base = 'http://127.0.0.1:8787';
+const port = process.env.PORT || 8787;
+const base = `http://127.0.0.1:${port}`;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function poll(fn, description, timeout = 15000) {
   const start = Date.now();
@@ -16,10 +17,10 @@ async function startServerCheck() {
   await poll(async () => {
     try { const r = await fetch(`${base}/api/health`); return r.ok; }
     catch { return false; }
-  }, 'Wrangler local HTTP server', 30000);
+  }, 'Node local HTTP server', 30000);
 }
 async function join(code, name) {
-  const ws = new WebSocket(`ws://127.0.0.1:8787/api/rooms/${code}/ws`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/rooms/${code}/ws`);
   const received = [];
   ws.addEventListener('message', e => received.push(JSON.parse(e.data)));
   ws.addEventListener('error', e => { console.error('WebSocket error', name, e.message || 'unknown'); });
