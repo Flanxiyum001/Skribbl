@@ -1,0 +1,27 @@
+name: Validate game
+
+on:
+  push:
+    branches: [main, feat/doodledash-multiplayer]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Unit and simulated multiplayer tests
+        run: npm run check
+      - name: Validate Cloudflare Worker bundle
+        run: npx wrangler deploy --dry-run --outdir .wrangler-build
+        env:
+          WRANGLER_SEND_METRICS: 'false'
