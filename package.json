@@ -1,0 +1,15 @@
+{
+  "name": "doodledash-office",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "check": "node --check src/index.js && node --check src/room.js && node --check public/app.js && node --test test/*.test.js",
+    "smoke": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
