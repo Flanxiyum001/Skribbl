@@ -84,3 +84,57 @@ test('rejects malformed drawing payloads and chat abuse, reconnect restores iden
   assert.equal(latest(second,'joined').id,latest(socket,'joined').id);
   assert.equal(room.game.players[0].name,'Sally');
 });
+
+
+test('sustained batched drawing never freezes after 50 messages, and late joiners resync', async () => {
+  const ctx = fakeContext(), room = new GameRoom(ctx, {}); await ctx.ready;
+  room.game.created = true;
+  const a = new FakeSocket(), b = new FakeSocket(); ctx.sockets.push(a,b);
+  const tokenA = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+  const tokenB = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+  await room.webSocketMessage(a, JSON.stringify({type:'join',protocol:2,name:'A',token:tokenA}));
+  await room.webSocketMessage(b, JSON.stringify({type:'join',protocol:2,name:'B',token:tokenB}));
+  await room.webSocketMessage(a, JSON.stringify({type:'start'}));
+  const drawer = room.game.drawer === latest(a,'joined').id ? a : b;
+  const watcher = drawer === a ? b : a;
+  await room.webSocketMessage(drawer, JSON.stringify({type:'choose',word:room.game.options[0]}));
+  for (let i = 0; i < 160; i++) {
+    await room.webSocketMessage(drawer, JSON.stringify({type:'strokes',color:'#000000',size:5,p:[.1,.1,i/160,.5]}));
+  }
+  assert.equal(room.game.strokes.length,160);
+  assert.equal(watcher.messages.filter(x=>x.type==='strokes').length,160);
+  const big = Array.from({length:48}, (_,i)=>[i/100,0,i/100,.7]).flat();
+  await room.webSocketMessage(drawer, JSON.stringify({type:'strokes',color:'#f87171',size:8,p:big}));
+  assert.equal(room.game.strokes.length,208);
+  assert.equal(latest(watcher,'strokes').p.length,192);
+  room.sync();
+  assert.equal(Object.hasOwn(latest(watcher,'state'),'strokes'),false);
+  const late=new FakeSocket();ctx.sockets.push(late);
+  await room.webSocketMessage(late, JSON.stringify({type:'join',protocol:2,name:'Late',token:'cccccccc-cccc-4ccc-cccc-cccccccccccc'}));
+  assert.equal(latest(late,'state').strokes.length,208);
+  assert.equal(Object.hasOwn(latest(watcher,'state'),'strokes'),false);
+});
+
+test('drawing validates packets and clear resets canvas epoch', async () => {
+  const ctx=fakeContext(),room=new GameRoom(ctx,{});await ctx.ready;
+  room.game.created=true;
+  const a=new FakeSocket(),b=new FakeSocket();ctx.sockets.push(a,b);
+  await room.webSocketMessage(a,JSON.stringify({type:'join',protocol:2,name:'A',token:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'}));
+  await room.webSocketMessage(b,JSON.stringify({type:'join',protocol:2,name:'B',token:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'}));
+  await room.webSocketMessage(a,JSON.stringify({type:'start'}));
+  const drawer=room.game.drawer===latest(a,'joined').id?a:b;
+  const viewer=drawer===a?b:a;
+  await room.webSocketMessage(drawer,JSON.stringify({type:'choose',word:room.game.options[0]}));
+  const normal={type:'strokes',color:'#000000',size:5,p:[0,0,.5,.5]};
+  await room.webSocketMessage(viewer,JSON.stringify(normal));
+  await room.webSocketMessage(drawer,JSON.stringify({...normal,p:[0,0,2,1]}));
+  await room.webSocketMessage(drawer,JSON.stringify({...normal,p:new Array(49*4).fill(.5)}));
+  assert.equal(room.game.strokes.length,0);
+  await room.webSocketMessage(drawer,JSON.stringify(normal));
+  assert.equal(room.game.strokes.length,1);
+  const epoch=room.game.canvasEpoch;
+  await room.webSocketMessage(drawer,JSON.stringify({type:'clear'}));
+  assert.equal(room.game.canvasEpoch,epoch+1);
+  assert.equal(room.game.strokes.length,0);
+  assert.equal(latest(viewer,'clear').canvasEpoch,epoch+1);
+});

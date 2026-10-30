@@ -10,7 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
 const PORT = Number(process.env.PORT || 8787);
 const ROOMS_MAX = 150;
-const ROOM_IDLE_MS = 3 * 60 * 60 * 1000;
+const ROOM_IDLE_MS = 45 * 60 * 1000;
+const ROOM_CREATES_PER_MINUTE = 30;
+let createWindowStart = Date.now();
+let createsThisWindow = 0;
 const WS_PATH = /^\/api\/rooms\/([A-HJ-NP-Z2-9]{6})\/ws$/;
 const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const rooms = new Map();
@@ -27,6 +30,11 @@ const json = (res, status, obj) => {
   res.end(JSON.stringify(obj));
 };
 const code = () => [...randomBytes(6)].map(b => CHARS[b % CHARS.length]).join('');
+function sameOrigin(req) {
+  if (!req.headers.origin) return true;
+  try { return new URL(req.headers.origin).host === req.headers.host; }
+  catch { return false; }
+}
 
 function createRoom() {
   const sockets = new Set();
@@ -59,11 +67,16 @@ function createRoom() {
   return entry;
 }
 
-const wss = new WebSocketServer({ noServer: true, maxPayload: 3072, perMessageDeflate: false });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 3072, perMessageDeflate: false, clientTracking: false });
 const server = http.createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
-  if (path === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'doodledash', runtime: 'node', version: 2 });
+  if (path === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'doodledash', runtime: 'node', version: 3 });
   if (path === '/api/rooms' && req.method === 'POST') {
+    if (!sameOrigin(req)) return json(res, 403, { error: 'Forbidden origin' });
+    const now = Date.now();
+    if (now - createWindowStart > 60_000) { createWindowStart = now; createsThisWindow = 0; }
+    if (createsThisWindow >= ROOM_CREATES_PER_MINUTE) return json(res, 429, { error: 'Too many new rooms. Try again shortly.' });
+    createsThisWindow++;
     if (rooms.size >= ROOMS_MAX) return json(res, 503, { error: 'Too many rooms. Please try later.' });
     let id;
     do { id = code(); } while (rooms.has(id));
@@ -87,7 +100,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const content = await readFile(join(PUBLIC, asset[0]));
     res.writeHead(200, {
-      'Content-Type': asset[1], 'Cache-Control': path === '/' || path === '/index.html' ? 'no-cache' : 'public, max-age=3600',
+      'Content-Type': asset[1], 'Cache-Control': ['/', '/index.html', '/app.js', '/styles.css'].includes(path) ? 'no-cache' : 'public, max-age=3600',
       'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY'
     });
     res.end(req.method === 'HEAD' ? undefined : content);
@@ -97,6 +110,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.headersTimeout = 10_000;
+server.requestTimeout = 15_000;
 server.on('upgrade', async (req, socket, head) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
@@ -119,12 +134,19 @@ server.on('upgrade', async (req, socket, head) => {
       ws.isAlive = true;
       ws.on('pong', () => { ws.isAlive = true; });
       ws.send(JSON.stringify({ type: 'hello' }));
+      const joinTimeout = setTimeout(() => {
+        if (!ws.deserializeAttachment()?.pid) ws.close(1008, 'Join timed out');
+      }, 10000);
+      joinTimeout.unref?.();
       ws.on('message', (raw, binary) => {
         if (binary) return;
         const message = raw.toString('utf8');
         entry.enqueue(() => entry.room.webSocketMessage(ws, message));
       });
-      ws.on('close', () => entry.enqueue(async () => { entry.sockets.delete(ws); await entry.room.webSocketClose(ws); }));
+      ws.on('close', () => {
+        clearTimeout(joinTimeout);
+        entry.enqueue(async () => { entry.sockets.delete(ws); await entry.room.webSocketClose(ws); });
+      });
       ws.on('error', error => console.warn('[websocket]', error.message));
     });
   } catch (error) {

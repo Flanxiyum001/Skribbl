@@ -25,7 +25,7 @@ async function join(code, name) {
   ws.addEventListener('message', e => received.push(JSON.parse(e.data)));
   ws.addEventListener('error', e => { console.error('WebSocket error', name, e.message || 'unknown'); });
   await poll(() => ws.readyState === WebSocket.OPEN, `${name} socket`);
-  ws.send(JSON.stringify({ type: 'join', name, token: crypto.randomUUID() }));
+  ws.send(JSON.stringify({ type: 'join', protocol: 2, name, token: crypto.randomUUID() }));
   const joined = await poll(() => received.find(m => m.type === 'joined'), `${name} join`);
   return {
     ws, id: joined.id, received,
@@ -62,8 +62,16 @@ try {
   const hidden = await guesser.waitState(s => s.phase === 'drawing', 'guesser drawing phase');
   assert.equal(hidden.word, null, 'word is concealed from guesser');
   assert.ok(hidden.masked.includes('_'));
-  drawer.send({ type: 'stroke', p: [.25,.25,.5,.5], color: '#000000', size: 5 });
-  await guesser.waitEvent('stroke');
+  const batch = { type:'strokes', color:'#000000', size:5, p:[.25,.25,.5,.5,.5,.5,.65,.65] };
+  drawer.send(batch);
+  const received = await guesser.waitEvent('strokes');
+  assert.deepEqual(received.p, batch.p);
+  const late = await join(code, 'Charlie');
+  try {
+    const snapshot = await late.waitState(s => Array.isArray(s.strokes) && s.strokes.length >= 2, 'late join canvas');
+    assert.equal(snapshot.strokes.length, 2);
+    assert.equal(Object.hasOwn(guesser.state(),'strokes'),false);
+  } finally { late.ws.close(); }
   guesser.send({ type: 'chat', text: answer.toUpperCase() });
   const revealed = await guesser.waitState(s => s.phase === 'reveal', 'correct guess and reveal');
   assert.equal(revealed.word, answer);

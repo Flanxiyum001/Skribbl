@@ -1,15 +1,27 @@
 import { pickWords, normalizeGuess, hiddenWord } from './words.js';
 
 const MAX_PLAYERS = 12;
-const MAX_STROKES = 3500;
+const MAX_STROKES = 12000;
+const MAX_STROKES_PER_PACKET = 48;
+const STROKE_REFILL_PER_SECOND = 500;
+const STROKE_BURST = 700;
 const COLOR_SET = new Set(['#ffffff','#000000','#f87171','#fb923c','#fbbf24','#a3e635','#34d399','#2dd4bf','#38bdf8','#818cf8','#c084fc','#f472b6','#787c91','#b45309']);
 const defaultGame = () => ({
   created: false, host: null, players: [], phase: 'lobby', settings: { rounds: 3, seconds: 80 },
   round: 0, turn: 0, order: [], drawer: null, options: [], answer: '', lastWord: '', hintStage: 0,
-  endsAt: 0, hintCount: 0, strokes: [], messages: [], guessedCount: 0
+  endsAt: 0, hintCount: 0, canvasEpoch: 0, strokes: [], messages: [], guessedCount: 0
 });
 const safeName = (s) => String(s || 'Guest').trim().replace(/[<>\x00-\x1f]/g, '').slice(0, 18) || 'Guest';
-const send = (ws, obj) => { try { ws.send(JSON.stringify(obj)); } catch { /* connection may have dropped */ } };
+// Disconnect slow consumers so they can resync the authoritative canvas.
+const send = (ws, obj) => {
+  try {
+    if (typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > 512 * 1024) {
+      ws.close(1013, 'Client too slow; reconnect');
+      return;
+    }
+    ws.send(JSON.stringify(obj));
+  } catch { /* connection may have dropped */ }
+};
 const live = (p) => p && p.connected;
 
 export class GameRoom {
@@ -31,12 +43,24 @@ export class GameRoom {
     return this.ctx.getWebSockets().find(ws => ws.deserializeAttachment()?.pid === pid);
   }
   broadcast(event) { for (const ws of this.ctx.getWebSockets()) send(ws, event); }
+  broadcastStrokes(p, color, size) {
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws.deserializeAttachment()?.protocol === 2) {
+        send(ws, { type: 'strokes', p, color, size });
+      } else {
+        // Old browser tabs retain legacy events until they refresh.
+        for (let i = 0; i < p.length; i += 4) {
+          send(ws, { type: 'stroke', stroke: { p: p.slice(i, i + 4), color, size } });
+        }
+      }
+    }
+  }
   announce(text, kind = 'system') {
     this.game.messages.push({ type: 'system', text, kind, time: Date.now() });
     this.game.messages = this.game.messages.slice(-45);
     this.broadcast({ type: 'message', message: this.game.messages.at(-1) });
   }
-  stateFor(pid) {
+  stateFor(pid, includeCanvas = false) {
     const g = this.game;
     const me = g.players.find(p => p.id === pid);
     const canSeeWord = g.phase === 'reveal' || g.phase === 'ended' || (g.phase === 'drawing' && (g.drawer === pid || me?.guessed));
@@ -47,13 +71,14 @@ export class GameRoom {
       masked: g.phase === 'drawing' ? hiddenWord(g.answer, g.hintCount) : '',
       wordLength: g.answer.length, options: g.phase === 'choosing' && g.drawer === pid ? g.options : [],
       players: g.players.map(({ id, name, score, connected, guessed }) => ({ id, name, score, connected, guessed, spectator: g.phase !== 'lobby' && !g.order.includes(id) })),
-      strokes: g.strokes, messages: g.messages
+      canvasEpoch: g.canvasEpoch || 0, ...(includeCanvas ? { strokes: g.strokes } : {}), messages: g.messages
     };
   }
-  sync() {
+  // Scoreboard and hint updates should not repaint the complete drawing.
+  sync(snapshotSocket = null) {
     for (const ws of this.ctx.getWebSockets()) {
       const pid = ws.deserializeAttachment()?.pid;
-      if (pid) send(ws, this.stateFor(pid));
+      if (pid) send(ws, this.stateFor(pid, ws === snapshotSocket || ws.deserializeAttachment()?.protocol !== 2));
     }
   }
   async setPhase(phase, seconds = 0) {
@@ -100,12 +125,12 @@ export class GameRoom {
         player.connected = true;
         // Keep original name and score stable across reconnects.
       }
-      ws.serializeAttachment({ pid: player.id, chatAt: 0, strokeAt: 0, strokeBurst: 0 });
+      ws.serializeAttachment({ pid: player.id, chatAt: 0, strokeAt: Date.now(), strokeTokens: STROKE_BURST, limitWarned: false, protocol: m.protocol === 2 ? 2 : 1 });
       if (!this.game.host || !this.game.players.some(p => p.id === this.game.host && p.connected)) this.game.host = player.id;
       send(ws, { type: 'joined', id: player.id, token });
       this.announce(`${player.name} joined the room`);
       await this.persist();
-      this.sync();
+      this.sync(ws);
       return;
     }
     const pid = attachment.pid;
@@ -129,26 +154,38 @@ export class GameRoom {
     if (m.type === 'choose' && g.phase === 'choosing' && g.drawer === pid && g.options.includes(m.word)) {
       await this.beginDrawing(m.word); return;
     }
-    if (m.type === 'stroke' && g.phase === 'drawing' && g.drawer === pid) {
-      const now = Date.now();
-      attachment.strokeBurst = now - (attachment.strokeAt || 0) > 1000 ? 0 : attachment.strokeBurst || 0;
-      attachment.strokeBurst++;
-      if (attachment.strokeBurst > 50 || g.strokes.length >= MAX_STROKES) return;
+    if ((m.type === 'stroke' || m.type === 'strokes') && g.phase === 'drawing' && g.drawer === pid) {
+      const { color, size } = m, p = m.p;
+      if (!COLOR_SET.has(color) || !Number.isInteger(size) || size < 2 || size > 30 ||
+          !Array.isArray(p) || p.length < 4 || p.length % 4 !== 0 ||
+          p.length > MAX_STROKES_PER_PACKET * 4 ||
+          (m.type === 'stroke' && p.length !== 4) ||
+          p.some(n => typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1)) return;
+      const count = p.length / 4, now = Date.now();
+      // Token bucket: sustained drawing should never freeze after 50 messages.
+      attachment.strokeTokens = Math.min(STROKE_BURST, (attachment.strokeTokens ?? STROKE_BURST) +
+        Math.max(0, now - (attachment.strokeAt || now)) * STROKE_REFILL_PER_SECOND / 1000);
       attachment.strokeAt = now;
+      if (attachment.strokeTokens < count) { ws.serializeAttachment(attachment); return; }
+      attachment.strokeTokens -= count;
+      if (g.strokes.length + count > MAX_STROKES) {
+        if (!attachment.limitWarned) send(ws, { type: 'error', message: 'Canvas is full. Use Clear to continue drawing.' });
+        attachment.limitWarned = true;
+        ws.serializeAttachment(attachment); return;
+      }
       ws.serializeAttachment(attachment);
-      const { p, color, size } = m;
-      if (!Array.isArray(p) || p.length !== 4 || p.some(n => typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1)) return;
-      if (!COLOR_SET.has(color) || !Number.isInteger(size) || size < 2 || size > 30) return;
-      const stroke = { p, color, size };
-      g.strokes.push(stroke);
-      this.broadcast({ type: 'stroke', stroke });
-      // Batch persistence to keep the free-tier Durable Objects write quota reasonable.
-      if (++this.pendingStrokes >= 12) { this.pendingStrokes = 0; await this.persist(); }
+      for (let i = 0; i < p.length; i += 4) {
+        g.strokes.push({ p: p.slice(i, i + 4), color, size });
+      }
+      this.broadcastStrokes(p, color, size);
+      this.pendingStrokes += count;
+      if (this.pendingStrokes >= 150) { this.pendingStrokes = 0; await this.persist(); }
       return;
     }
     if (m.type === 'clear' && g.phase === 'drawing' && g.drawer === pid) {
-      g.strokes = []; this.pendingStrokes = 0;
-      await this.persist(); this.broadcast({ type: 'clear' }); return;
+      g.strokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
+      attachment.limitWarned = false; ws.serializeAttachment(attachment);
+      await this.persist(); this.broadcast({ type: 'clear', canvasEpoch: g.canvasEpoch }); return;
     }
     if (m.type === 'chat' && typeof m.text === 'string') {
       const text = m.text.trim().slice(0, 120);
@@ -198,7 +235,7 @@ export class GameRoom {
     if (g.turn >= g.order.length * g.settings.rounds) return this.nextTurn();
     g.round = Math.floor(g.turn / g.order.length) + 1;
     g.drawer = g.order[g.turn % g.order.length]; g.turn++;
-    g.answer = ''; g.options = pickWords(); g.hintCount = 0; g.hintStage = 0; g.guessedCount = 0; g.strokes = []; this.pendingStrokes = 0;
+    g.answer = ''; g.options = pickWords(); g.hintCount = 0; g.hintStage = 0; g.guessedCount = 0; g.strokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
     for (const p of g.players) p.guessed = false;
     await this.setPhase('choosing', 15);
     this.announce(`${g.players.find(p => p.id === g.drawer)?.name || 'Someone'} is choosing a word…`);
