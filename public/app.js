@@ -1,0 +1,271 @@
+const $ = (id) => document.getElementById(id);
+const COLORS = ['#000000','#787c91','#ffffff','#f87171','#fb923c','#fbbf24','#a3e635','#34d399','#2dd4bf','#38bdf8','#818cf8','#c084fc','#f472b6','#b45309'];
+const canvas = $('draw-canvas');
+const ctx = canvas.getContext('2d');
+const app = {
+  code: null, socket: null, state: null, me: null, token: null, drawing: false,
+  color: COLORS[0], lastPoint: null, lastDrawAt: 0, stopped: false, attempts: 0,
+  chatFingerprint: '', toastTimer: null
+};
+$('nickname').value = localStorage.getItem('dd:nickname') || '';
+const queryRoom = new URLSearchParams(window.location.search).get('room');
+if (queryRoom && /^[A-Z2-9]{6}$/i.test(queryRoom)) $('room-code').value = queryRoom.toUpperCase();
+
+function toast(message) {
+  const box = $('toast'); box.textContent = message; box.classList.add('visible');
+  clearTimeout(app.toastTimer); app.toastTimer = setTimeout(() => box.classList.remove('visible'), 3200);
+}
+function showError(error) {
+  $('landing-error').textContent = error;
+  $('landing-error').hidden = false;
+  toast(error);
+}
+function nickname() {
+  const name = $('nickname').value.trim().replace(/[<>\x00-\x1f]/g, '').slice(0, 18) || 'Guest';
+  localStorage.setItem('dd:nickname', name);
+  return name;
+}
+function setBusy(busy) {
+  $('create-room').disabled = busy;
+  $('join-room').disabled = busy;
+}
+function send(message) {
+  if (app.socket?.readyState === WebSocket.OPEN) app.socket.send(JSON.stringify(message));
+}
+async function createRoom() {
+  setBusy(true); $('landing-error').hidden = true;
+  try {
+    const response = await fetch('/api/rooms', { method: 'POST' });
+    if (!response.ok) throw new Error('Could not create a room. Is the game server running?');
+    const { code } = await response.json();
+    enterRoom(code);
+  } catch (error) { showError(error.message); }
+  finally { setBusy(false); }
+}
+function joinRoom() {
+  $('landing-error').hidden = true;
+  const code = $('room-code').value.toUpperCase().replace(/\s/g, '');
+  if (!/^[A-HJ-NP-Z2-9]{6}$/.test(code)) return showError('Enter the 6-character code from your friend.');
+  enterRoom(code);
+}
+function enterRoom(code) {
+  app.stopped = false; app.code = code; app.attempts = 0; app.state = null; app.me = null;
+  app.token = sessionStorage.getItem('dd:token:' + code) || crypto.randomUUID();
+  sessionStorage.setItem('dd:token:' + code, app.token);
+  $('landing').hidden = true; $('game-screen').hidden = false;
+  $('room-display').textContent = code;
+  window.history.replaceState(null, '', `${location.pathname}?room=${code}`);
+  document.title = `Room ${code} · DoodleDash`;
+  renderCanvas([]);
+  connect();
+}
+function connect() {
+  if (app.stopped || !app.code) return;
+  if (app.socket) { app.socket.onclose = null; app.socket.close(); }
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${scheme}//${location.host}/api/rooms/${app.code}/ws`);
+  app.socket = ws;
+  ws.onopen = () => { app.attempts = 0; send({ type: 'join', name: nickname(), token: app.token }); };
+  ws.onmessage = (event) => {
+    let packet; try { packet = JSON.parse(event.data); } catch { return; }
+    if (packet.type === 'joined') {
+      app.me = packet.id; app.token = packet.token;
+      sessionStorage.setItem('dd:token:' + app.code, app.token);
+    } else if (packet.type === 'state') {
+      app.state = packet; render();
+    } else if (packet.type === 'stroke') {
+      if (app.state?.drawer !== app.me) stroke(packet.stroke);
+    } else if (packet.type === 'clear') {
+      renderCanvas([]);
+    } else if (packet.type === 'message') {
+      if (app.state) {
+        app.state.messages.push(packet.message);
+        app.state.messages = app.state.messages.slice(-45);
+        renderMessages();
+      }
+    } else if (packet.type === 'error') {
+      toast(packet.message);
+    }
+  };
+  ws.onclose = (ev) => {
+    if (app.stopped || app.socket !== ws) return;
+    if (ev.code === 1008) return leaveRoom('Room is full or unavailable.');
+    if (++app.attempts > 6) return leaveRoom('Connection failed. Please try joining again.');
+    toast('Connection lost. Reconnecting…');
+    setTimeout(connect, Math.min(5000, 700 * app.attempts));
+  };
+  ws.onerror = () => { /* onclose performs retries and reports failures */ };
+}
+function leaveRoom(message) {
+  app.stopped = true;
+  if (app.socket) { app.socket.onclose = null; app.socket.close(); }
+  app.socket = null; app.state = null; app.code = null; app.me = null;
+  $('landing').hidden = false; $('game-screen').hidden = true;
+  window.history.replaceState(null, '', location.pathname);
+  document.title = 'DoodleDash — Draw. Guess. Repeat.';
+  if (message) showError(message);
+}
+function render() {
+  const s = app.state;
+  if (!s) return;
+  const active = s.players.filter(p => p.connected);
+  const myPlayer = s.players.find(p => p.id === app.me);
+  const isHost = s.host === app.me;
+  const amDrawing = s.drawer === app.me && s.phase === 'drawing';
+  const drawer = s.players.find(p => p.id === s.drawer);
+  $('player-count').textContent = `${active.length} / 12`;
+  $('round-display').textContent = s.round ? `${s.round} / ${s.settings.rounds}` : '—';
+  $('drawer-display').textContent = s.phase === 'lobby' ? 'Waiting for players' : (drawer ? `${drawer.name} drawing` : 'Game finished');
+  $('word-display').textContent = s.phase === 'lobby' ? 'Waiting for the game…'
+    : s.phase === 'choosing' ? 'Choosing a word…'
+    : s.phase === 'drawing' ? (s.word || s.masked)
+    : s.phase === 'reveal' ? s.word
+    : 'Game complete!';
+  $('canvas-overlay').hidden = s.phase !== 'lobby';
+  $('choose-overlay').hidden = s.phase !== 'choosing';
+  $('reveal-overlay').hidden = s.phase !== 'reveal';
+  $('end-overlay').hidden = s.phase !== 'ended';
+  $('drawing-tools').hidden = !amDrawing;
+  $('spectator-tip').hidden = amDrawing;
+  $('draw-canvas').classList.toggle('can-draw', amDrawing);
+  $('lobby-settings').hidden = !isHost;
+  $('start-game').hidden = !isHost;
+  $('start-game').disabled = active.length < 2;
+  $('play-again').hidden = !isHost;
+  $('rounds-select').value = String(s.settings.rounds);
+  $('seconds-select').value = String(s.settings.seconds);
+  $('choose-title').textContent = s.drawer === app.me ? 'Choose what to draw' : `${drawer?.name || 'Someone'} is choosing…`;
+  $('choose-subtitle').textContent = s.drawer === app.me ? 'Pick a word before the timer runs out.' : 'Get ready to guess!';
+  const choices = $('word-options'); choices.replaceChildren();
+  if (s.drawer === app.me) for (const word of s.options) {
+    const b = document.createElement('button'); b.textContent = word; b.type = 'button';
+    b.addEventListener('click', () => send({ type: 'choose', word }));
+    choices.appendChild(b);
+  }
+  $('reveal-word').textContent = `The word was “${s.word || '???'}”`;
+  const winner = [...s.players].sort((a,b) => b.score - a.score)[0];
+  $('winner-text').textContent = winner ? `🥇 ${winner.name} wins with ${winner.score} points!` : 'Thanks for playing!';
+  $('chat-input').placeholder = myPlayer?.guessed ? 'You guessed it! Chat away…' : (s.phase === 'drawing' ? 'Type your guess…' : 'Say something…');
+  renderPlayers(); renderCanvas(s.strokes); renderMessages(); updateClock();
+}
+function renderPlayers() {
+  const s = app.state, list = $('player-list'); list.replaceChildren();
+  [...s.players].sort((a,b) => b.score - a.score).forEach((p, i) => {
+    const row = document.createElement('div'); row.className = 'player' + (!p.connected ? ' offline' : '') + (p.id === app.me ? ' is-me' : '');
+    const rank = document.createElement('span'); rank.className = 'rank'; rank.textContent = `#${i+1}`;
+    const avatar = document.createElement('span'); avatar.className = 'avatar'; avatar.textContent = ['✿','✦','☻','⚡','♠','✎','★'][p.name.length % 7];
+    const details = document.createElement('div'); details.style.minWidth = '0';
+    const name = document.createElement('span'); name.className = 'player-name'; name.textContent = p.name + (p.id === app.me ? ' (you)' : '');
+    const score = document.createElement('span'); score.className = 'player-score'; score.textContent = `${p.score} pts` + (p.spectator ? ' · spectator' : '');
+    details.append(name, score);
+    const tag = document.createElement('span'); tag.className = 'player-tag'; tag.textContent = p.id === s.drawer ? '✏' : p.guessed ? '✓' : p.id === s.host ? '♛' : '';
+    row.append(rank, avatar, details, tag); list.appendChild(row);
+  });
+}
+function renderMessages() {
+  const messages = app.state?.messages || [];
+  const signature = messages.map(m => `${m.time}:${m.text}`).join('|');
+  if (signature === app.chatFingerprint) return;
+  app.chatFingerprint = signature;
+  const feed = $('chat-feed'); feed.replaceChildren();
+  if (!messages.length) {
+    const placeholder = document.createElement('div'); placeholder.className = 'chat-message system'; placeholder.textContent = 'Room chat is ready. Say hi! 👋'; feed.appendChild(placeholder);
+  }
+  messages.forEach(m => {
+    const row = document.createElement('div'); row.className = 'chat-message' + (m.type === 'system' ? ' system ' + (m.kind || '') : '');
+    if (m.type === 'chat') {
+      const name = document.createElement('b'); name.textContent = `${m.player}: `;
+      row.append(name, document.createTextNode(m.text));
+    } else row.textContent = m.text;
+    feed.appendChild(row);
+  });
+  feed.scrollTop = feed.scrollHeight;
+}
+function updateClock() {
+  const s = app.state;
+  if (!s || !s.endsAt) { $('timer-display').textContent = '--'; return; }
+  const remaining = Math.max(0, Math.ceil((s.endsAt - Date.now()) / 1000));
+  $('timer-display').textContent = String(remaining).padStart(2,'0');
+}
+function stroke(segment) {
+  if (!segment || !Array.isArray(segment.p) || segment.p.length !== 4) return;
+  const [x1,y1,x2,y2] = segment.p;
+  ctx.beginPath();
+  ctx.strokeStyle = segment.color;
+  ctx.lineWidth = segment.size;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.moveTo(x1 * canvas.width, y1 * canvas.height);
+  ctx.lineTo(x2 * canvas.width, y2 * canvas.height);
+  ctx.stroke();
+}
+function renderCanvas(segments) {
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (const segment of segments || []) stroke(segment);
+}
+function point(ev) {
+  const rect = canvas.getBoundingClientRect();
+  return [Math.min(1, Math.max(0, (ev.clientX-rect.left)/rect.width)), Math.min(1, Math.max(0,(ev.clientY-rect.top)/rect.height))];
+}
+function draw(ev, force = false) {
+  if (!app.drawing || app.state?.drawer !== app.me || app.state?.phase !== 'drawing') return;
+  const now = performance.now();
+  if (!force && now - app.lastDrawAt < 24) return;
+  const next = point(ev), last = app.lastPoint || next;
+  const seg = { p: [...last, ...next], color: app.color, size: +$('brush-size').value };
+  app.lastPoint = next; app.lastDrawAt = now;
+  stroke(seg); send({ type: 'stroke', ...seg });
+}
+function installCanvas() {
+  canvas.addEventListener('pointerdown', ev => {
+    if (app.state?.drawer !== app.me || app.state?.phase !== 'drawing') return;
+    ev.preventDefault(); app.drawing = true; canvas.setPointerCapture(ev.pointerId);
+    app.lastPoint = point(ev); draw(ev, true);
+  });
+  canvas.addEventListener('pointermove', ev => { if (app.drawing) { ev.preventDefault(); draw(ev); } });
+  ['pointerup','pointercancel','lostpointercapture'].forEach(event => canvas.addEventListener(event, ev => {
+    if (app.drawing && event === 'pointerup') draw(ev,true);
+    app.drawing = false; app.lastPoint = null;
+  }));
+}
+function installPalette() {
+  for (const color of COLORS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'color-swatch' + (color === app.color ? ' selected' : '');
+    b.style.backgroundColor = color; b.title = color; b.setAttribute('aria-label', `Color ${color}`);
+    b.addEventListener('click', () => {
+      app.color = color;
+      document.querySelectorAll('.color-swatch').forEach(el => el.classList.remove('selected'));
+      b.classList.add('selected'); $('eraser-tool').classList.remove('selected');
+    });
+    $('color-palette').appendChild(b);
+  }
+}
+async function copyInvite() {
+  if (!app.code) return;
+  const link = new URL(location.href); link.searchParams.set('room', app.code);
+  try { await navigator.clipboard.writeText(link.toString()); toast('Invite link copied! Share it with your crew. ✨'); }
+  catch { window.prompt('Copy this invite link:', link.toString()); }
+}
+$('create-room').addEventListener('click', createRoom);
+$('join-room').addEventListener('click', joinRoom);
+$('room-code').addEventListener('keydown', ev => { if (ev.key === 'Enter') joinRoom(); });
+$('nickname').addEventListener('keydown', ev => { if (ev.key === 'Enter') createRoom(); });
+$('copy-link').addEventListener('click', copyInvite);
+$('invite-game').addEventListener('click', copyInvite);
+$('leave-room').addEventListener('click', () => leaveRoom());
+$('start-game').addEventListener('click', () => send({ type: 'start' }));
+$('play-again').addEventListener('click', () => send({ type: 'start' }));
+$('rounds-select').addEventListener('change', () => send({ type: 'settings', rounds: +$('rounds-select').value, seconds: +$('seconds-select').value }));
+$('seconds-select').addEventListener('change', () => send({ type: 'settings', rounds: +$('rounds-select').value, seconds: +$('seconds-select').value }));
+$('clear-tool').addEventListener('click', () => { if (confirm('Clear the whole canvas?')) send({ type: 'clear' }); });
+$('eraser-tool').addEventListener('click', () => {
+  app.color = '#ffffff';
+  document.querySelectorAll('.color-swatch').forEach(el => el.classList.remove('selected'));
+  $('eraser-tool').classList.add('selected');
+});
+$('chat-form').addEventListener('submit', ev => {
+  ev.preventDefault(); const message = $('chat-input').value.trim(); if (!message) return;
+  send({ type: 'chat', text: message }); $('chat-input').value = '';
+});
+window.addEventListener('pagehide', () => { app.stopped = true; app.socket?.close(); });
+installCanvas(); installPalette(); renderCanvas([]); setInterval(updateClock, 250);
