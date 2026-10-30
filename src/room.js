@@ -63,12 +63,13 @@ export class GameRoom {
   stateFor(pid, includeCanvas = false) {
     const g = this.game;
     const me = g.players.find(p => p.id === pid);
-    const canSeeWord = g.phase === 'reveal' || g.phase === 'ended' || (g.phase === 'drawing' && (g.drawer === pid || me?.guessed));
+    // A correct guess never sends the secret answer back over the wire. Only the artist sees it during drawing.
+    const canSeeWord = g.phase === 'reveal' || g.phase === 'ended' || (g.phase === 'drawing' && g.drawer === pid);
     return {
       type: 'state', phase: g.phase, host: g.host,
       me: pid, round: g.round, turn: g.turn, totalTurns: g.order.length * g.settings.rounds,
       drawer: g.drawer, endsAt: g.endsAt, settings: g.settings,       word: canSeeWord ? (g.phase === 'reveal' ? g.lastWord : g.answer) : null,
-      masked: g.phase === 'drawing' ? hiddenWord(g.answer, g.hintCount) : '',
+      masked: g.phase === 'drawing' ? (me?.guessed ? '••••••' : hiddenWord(g.answer, g.hintCount)) : '',
       wordLength: g.answer.length, options: g.phase === 'choosing' && g.drawer === pid ? g.options : [],
       players: g.players.map(({ id, name, score, connected, guessed }) => ({ id, name, score, connected, guessed, spectator: g.phase !== 'lobby' && !g.order.includes(id) })),
       canvasEpoch: g.canvasEpoch || 0, ...(includeCanvas ? { strokes: g.strokes } : {}), messages: g.messages
@@ -259,7 +260,8 @@ export class GameRoom {
     this.game.lastWord = this.game.answer || this.game.options[0] || '???';
     this.game.answer = ''; this.game.options = [];
     await this.setPhase('reveal', 5);
-    this.announce(`The word was ${this.game.lastWord}`, 'reveal');
+    // Do not place the answer in public chat; clients reveal it only on explicit request.
+    this.announce('Round complete! Reveal the answer if you want to.', 'reveal');
   }
   async alarm() {
     const g = this.game;

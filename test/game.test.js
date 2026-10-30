@@ -138,3 +138,33 @@ test('drawing validates packets and clear resets canvas epoch', async () => {
   assert.equal(room.game.strokes.length,0);
   assert.equal(latest(viewer,'clear').canvasEpoch,epoch+1);
 });
+
+
+test('office privacy: correct guess hides server word and round reveal never leaks into chat', async () => {
+  const ctx = fakeContext(), room = new GameRoom(ctx, {}); await ctx.ready;
+  room.game.created = true;
+  const sockets = [new FakeSocket(),new FakeSocket(),new FakeSocket()];
+  ctx.sockets.push(...sockets);
+  const names = ['Alpha','Beta','Gamma'];
+  for (let i=0; i<sockets.length; i++) {
+    const token = `${String(i+1).repeat(8)}-${String(i+1).repeat(4)}-4${String(i+1).repeat(3)}-a${String(i+1).repeat(3)}-${String(i+1).repeat(12)}`;
+    await room.webSocketMessage(sockets[i], JSON.stringify({type:'join',protocol:2,name:names[i],token}));
+  }
+  await room.webSocketMessage(sockets[0],JSON.stringify({type:'start'}));
+  const artist = sockets.find(ws=>latest(ws,'joined').id === room.game.drawer);
+  const guesser = sockets.find(ws=>ws!==artist);
+  const answer = room.game.options[0];
+  await room.webSocketMessage(artist,JSON.stringify({type:'choose',word:answer}));
+  assert.equal(latest(artist,'state').word, answer);
+  assert.equal(latest(guesser,'state').word,null);
+  await room.webSocketMessage(guesser,JSON.stringify({type:'chat',text:answer.toUpperCase()}));
+  assert.equal(room.game.phase,'drawing','one correct guess must not finish a three-person round');
+  const privateState=latest(guesser,'state');
+  assert.equal(privateState.players.find(p=>p.id===latest(guesser,'joined').id).guessed,true);
+  assert.equal(privateState.word,null,'a correct guess must not reveal the answer over the socket');
+  assert.equal(privateState.masked,'••••••','a correct guesser does not get hints that reveal the word');
+  assert.ok(!guesser.messages.some(m=>m.type==='message' && m.message?.text?.includes(answer)));
+  await room.reveal();
+  assert.equal(latest(guesser,'state').word,answer,'the ended round may reveal only when the user opts in');
+  assert.ok(!room.game.messages.some(m=>m.kind==='reveal' && m.text.includes(answer)),'round-end chat must not publish answer');
+});

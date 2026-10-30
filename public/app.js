@@ -5,7 +5,7 @@ const ctx = canvas.getContext('2d');
 const app = {
   code: null, socket: null, state: null, me: null, token: null, drawing: false,
   color: COLORS[0], lastPoint: null, drawPointerId: null, pendingStrokes: [], pendingStyle: null, flushTimer: null, canvasEpoch: null, stopped: false, attempts: 0,
-  chatFingerprint: '', toastTimer: null
+  chatFingerprint: '', toastTimer: null, privacyTurn: null, hideArtistWord: false, hideRevealWord: true
 };
 $('nickname').value = localStorage.getItem('dd:nickname') || '';
 const queryRoom = new URLSearchParams(window.location.search).get('room');
@@ -49,7 +49,7 @@ function joinRoom() {
   enterRoom(code);
 }
 function enterRoom(code) {
-  app.stopped = false; app.code = code; app.attempts = 0; app.state = null; app.me = null; app.canvasEpoch = null; discardPending();
+  app.stopped = false; app.code = code; app.attempts = 0; app.state = null; app.me = null; app.canvasEpoch = null; app.privacyTurn = null; app.hideArtistWord = false; app.hideRevealWord = true; discardPending();
   app.token = sessionStorage.getItem('dd:token:' + code) || crypto.randomUUID();
   sessionStorage.setItem('dd:token:' + code, app.token);
   $('landing').hidden = true; $('game-screen').hidden = false;
@@ -111,6 +111,13 @@ function leaveRoom(message) {
 function render() {
   const s = app.state;
   if (!s) return;
+  // Privacy only resets on a new turn, not on a chat update, hint, or reconnect.
+  const turnKey = `${s.round}:${s.turn}:${s.drawer}`;
+  if (app.privacyTurn !== turnKey) {
+    app.privacyTurn = turnKey;
+    app.hideArtistWord = false;
+    app.hideRevealWord = true;
+  }
   const active = s.players.filter(p => p.connected);
   const myPlayer = s.players.find(p => p.id === app.me);
   const isHost = s.host === app.me;
@@ -119,11 +126,25 @@ function render() {
   $('player-count').textContent = `${active.length} / 12`;
   $('round-display').textContent = s.round ? `${s.round} / ${s.settings.rounds}` : '—';
   $('drawer-display').textContent = s.phase === 'lobby' ? 'Waiting for players' : (drawer ? `${drawer.name} drawing` : 'Game finished');
+  // Never display the answer after a successful guess; the server also withholds it.
+  const guessedCorrectly = s.phase === 'drawing' && !amDrawing && !!myPlayer?.guessed;
+  const artistCanHide = amDrawing && !!s.word;
+  const concealed = (artistCanHide && app.hideArtistWord) || guessedCorrectly ||
+    (s.phase === 'reveal' && app.hideRevealWord);
   $('word-display').textContent = s.phase === 'lobby' ? 'Waiting for the game…'
     : s.phase === 'choosing' ? 'Choosing a word…'
-    : s.phase === 'drawing' ? (s.word || s.masked)
-    : s.phase === 'reveal' ? s.word
+    : s.phase === 'drawing' ? (guessedCorrectly ? '••••••  ✓ You got it!' : artistCanHide && app.hideArtistWord ? '••••••' : (s.word || s.masked))
+    : s.phase === 'reveal' ? (app.hideRevealWord ? '••••••' : (s.word || '???'))
     : 'Game complete!';
+  $('word-display').classList.toggle('is-concealed', concealed);
+  const artistToggle = $('word-privacy-toggle');
+  artistToggle.hidden = !artistCanHide;
+  artistToggle.textContent = app.hideArtistWord ? '👁 Show word' : '🙈 Hide word';
+  artistToggle.setAttribute('aria-pressed', String(app.hideArtistWord));
+  const revealToggle = $('reveal-privacy-toggle');
+  revealToggle.hidden = s.phase !== 'reveal';
+  revealToggle.textContent = app.hideRevealWord ? '👁 Show answer' : '🙈 Hide answer';
+  revealToggle.setAttribute('aria-pressed', String(!app.hideRevealWord));
   $('canvas-overlay').hidden = s.phase !== 'lobby';
   $('choose-overlay').hidden = s.phase !== 'choosing';
   $('reveal-overlay').hidden = s.phase !== 'reveal';
@@ -145,7 +166,7 @@ function render() {
     b.addEventListener('click', () => send({ type: 'choose', word }));
     choices.appendChild(b);
   }
-  $('reveal-word').textContent = `The word was “${s.word || '???'}”`;
+  $('reveal-word').textContent = app.hideRevealWord ? 'Answer hidden from nearby screens.' : `The word was “${s.word || '???'}”`;
   const winner = [...s.players].sort((a,b) => b.score - a.score)[0];
   $('winner-text').textContent = winner ? `🥇 ${winner.name} wins with ${winner.score} points!` : 'Thanks for playing!';
   $('chat-input').placeholder = myPlayer?.guessed ? 'You guessed it! Chat away…' : (s.phase === 'drawing' ? 'Type your guess…' : 'Say something…');
@@ -331,6 +352,16 @@ $('create-room').addEventListener('click', createRoom);
 $('join-room').addEventListener('click', joinRoom);
 $('room-code').addEventListener('keydown', ev => { if (ev.key === 'Enter') joinRoom(); });
 $('nickname').addEventListener('keydown', ev => { if (ev.key === 'Enter') createRoom(); });
+$('word-privacy-toggle').addEventListener('click', () => {
+  if (app.state?.phase !== 'drawing' || app.state.drawer !== app.me) return;
+  app.hideArtistWord = !app.hideArtistWord;
+  render();
+});
+$('reveal-privacy-toggle').addEventListener('click', () => {
+  if (app.state?.phase !== 'reveal') return;
+  app.hideRevealWord = !app.hideRevealWord;
+  render();
+});
 $('copy-link').addEventListener('click', copyInvite);
 $('invite-game').addEventListener('click', copyInvite);
 $('leave-room').addEventListener('click', () => leaveRoom());
