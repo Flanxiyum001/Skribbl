@@ -7,8 +7,8 @@
   <meta name="description" content="DoodleDash — private drawing and guessing games with your favorite people." />
   <title>DoodleDash — Draw. Guess. Repeat.</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css?v=3" />
-  <script src="/app.js?v=3" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=4" />
+  <script src="/app.js?v=4" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -51,12 +51,12 @@
     <div class="play-grid">
       <aside class="panel players-panel"><div class="panel-head"><h3>🏆 Leaderboard</h3><span id="player-count" class="mini-badge">0 / 12</span></div><div id="player-list" class="player-list"></div><div class="panel-bottom">The more, the merrier ✨</div></aside>
       <section class="canvas-panel">
-        <div class="canvas-topline"><div class="word-display"><small>THE WORD</small><strong id="word-display">Waiting for the game…</strong></div><div class="timer" aria-live="off"><span>⏱</span><strong id="timer-display">--</strong><small>SEC</small></div></div>
+        <div class="canvas-topline"><div class="word-display"><small>THE WORD</small><div class="word-line"><strong id="word-display">Waiting for the game…</strong><button id="word-privacy-toggle" class="privacy-button" type="button" aria-pressed="false" title="Hide the secret word from nearby screens" hidden>🙈 Hide word</button></div></div><div class="timer" aria-live="off"><span>⏱</span><strong id="timer-display">--</strong><small>SEC</small></div></div>
         <div id="canvas-frame" class="canvas-frame">
           <canvas id="draw-canvas" width="960" height="600" aria-label="Shared drawing canvas"></canvas>
           <div id="canvas-overlay" class="canvas-overlay"><div class="overlay-art">✎</div><h2>Get your crew together!</h2><p>Invite a friend to start drawing and guessing.</p><div id="lobby-settings" class="lobby-settings" hidden><label>ROUNDS <select id="rounds-select"><option value="2">2 rounds</option><option value="3" selected>3 rounds</option><option value="4">4 rounds</option><option value="5">5 rounds</option><option value="6">6 rounds</option></select></label><label>DRAW TIME <select id="seconds-select"><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="80" selected>80 seconds</option><option value="100">100 seconds</option><option value="120">120 seconds</option></select></label></div><button id="start-game" class="btn btn-primary" hidden>🎉 Start game</button><button id="invite-game" class="btn btn-secondary">📋 Copy invite link</button></div>
           <div id="choose-overlay" class="canvas-overlay" hidden><div class="overlay-art">💭</div><h2 id="choose-title">Choose what to draw</h2><p id="choose-subtitle">Pick your word before the timer runs out.</p><div id="word-options" class="word-options"></div></div>
-          <div id="reveal-overlay" class="canvas-overlay soft-overlay" hidden><div class="overlay-art">🎉</div><h2 id="reveal-title">Nice drawing!</h2><p id="reveal-word"></p></div>
+          <div id="reveal-overlay" class="canvas-overlay soft-overlay" hidden><div class="overlay-art">🎉</div><h2 id="reveal-title">Nice drawing!</h2><p id="reveal-word">Answer hidden for privacy.</p><button id="reveal-privacy-toggle" type="button" class="privacy-button privacy-reveal-button" aria-pressed="false">👁 Show answer</button></div>
           <div id="end-overlay" class="canvas-overlay" hidden><div class="overlay-art">🏆</div><h2>That's a wrap!</h2><p id="winner-text"></p><button id="play-again" class="btn btn-primary" hidden>↻ Play again</button></div>
         </div>
         <div id="drawing-tools" class="toolbar" hidden><div class="colors" id="color-palette" aria-label="Drawing colors"></div><div class="tool-divider"></div><button id="eraser-tool" class="tool-btn" title="Eraser" aria-label="Eraser">◻</button><button id="clear-tool" class="tool-btn" title="Clear canvas" aria-label="Clear canvas">🗑</button><label class="size-label">BRUSH <input id="brush-size" type="range" min="2" max="30" value="5" aria-label="Brush size" /></label></div>
