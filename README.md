@@ -24,11 +24,11 @@ Visit http://localhost:8787. Use two tabs to test a game.
 ## Deploy to Render
 
 1. Connect your GitHub repository at https://dashboard.render.com/.
-2. [Deploy this branch to Render](https://render.com/deploy?repo=https://github.com/Flanxiyum001/Skribbl/tree/feat/doodledash-multiplayer) (uses `render.yaml`).
+2. [Deploy this branch to Render](https://render.com/deploy?repo=https://github.com/Flanxiyum001/Skribbl/tree/main) (uses `render.yaml`).
 3. Review the **Free** Node Web Service. Approve deployment.
 4. Once the service reports **Live**, open its `https://<name>.onrender.com` link and share room invites.
 
-Manual setup: New → Web Service → repo `Flanxiyum001/Skribbl`, branch `feat/doodledash-multiplayer`, build `npm install --no-audit --no-fund`, start `npm start`, health check `/api/health`.
+Manual setup: New → Web Service → repo `Flanxiyum001/Skribbl`, branch `main`, build `npm install --no-audit --no-fund`, start `npm start`, health check `/api/health`.
 
 ### Limitations
 

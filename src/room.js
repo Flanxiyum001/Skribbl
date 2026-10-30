@@ -1,4 +1,3 @@
-import { DurableObject } from './durable-shim.js';
 import { pickWords, normalizeGuess, hiddenWord } from './words.js';
 
 const MAX_PLAYERS = 12;
@@ -13,9 +12,10 @@ const safeName = (s) => String(s || 'Guest').trim().replace(/[<>\x00-\x1f]/g, ''
 const send = (ws, obj) => { try { ws.send(JSON.stringify(obj)); } catch { /* connection may have dropped */ } };
 const live = (p) => p && p.connected;
 
-export class GameRoom extends DurableObject {
+export class GameRoom {
   constructor(ctx, env) {
-    super(ctx, env);
+    this.ctx = ctx;
+    this.env = env;
     this.game = defaultGame();
     this.pendingStrokes = 0;
     ctx.blockConcurrencyWhile(async () => {
