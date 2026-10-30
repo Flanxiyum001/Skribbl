@@ -62,10 +62,14 @@ try {
   const hidden = await guesser.waitState(s => s.phase === 'drawing', 'guesser drawing phase');
   assert.equal(hidden.word, null, 'word is concealed from guesser');
   assert.ok(hidden.masked.includes('_'));
-  const batch = { type:'strokes', color:'#000000', size:5, p:[.25,.25,.5,.5,.5,.5,.65,.65] };
+  const batch = { type:'strokes', color:'#000000', size:5, gesture:'11111111-1111-4111-8111-111111111111', p:[.25,.25,.5,.5,.5,.5,.65,.65] };
   drawer.send(batch);
   const received = await guesser.waitEvent('strokes');
   assert.deepEqual(received.p, batch.p);
+  drawer.send({ type: 'undo' });
+  await guesser.waitState(s => Array.isArray(s.strokes) && s.strokes.length === 0 && s.phase === 'drawing','undo sync');
+  drawer.send({ type: 'redo' });
+  await guesser.waitState(s => Array.isArray(s.strokes) && s.strokes.length === 2 && s.phase === 'drawing','redo sync');
   const late = await join(code, 'Charlie');
   try {
     const snapshot = await late.waitState(s => Array.isArray(s.strokes) && s.strokes.length >= 2, 'late join canvas');

@@ -14,3 +14,9 @@ test('mask preserves spaces and never exposes entire answer', () => {
   assert.equal(hiddenWord('ice cream', 0), '_ _ _   _ _ _ _ _');
   assert.ok(hiddenWord('ice cream', 2).includes('_'));
 });
+
+test('large expanded drawing bank has no normalization-colliding words', () => {
+  assert.ok(WORDS.length >= 700);
+  assert.equal(new Set(WORDS.map(normalizeGuess)).size, WORDS.length);
+  assert.ok(WORDS.every(word => word.length > 1 && word.length <= 42));
+});

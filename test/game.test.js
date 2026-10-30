@@ -168,3 +168,38 @@ test('office privacy: correct guess hides server word and round reveal never lea
   assert.equal(latest(guesser,'state').word,answer,'the ended round may reveal only when the user opts in');
   assert.ok(!room.game.messages.some(m=>m.kind==='reveal' && m.text.includes(answer)),'round-end chat must not publish answer');
 });
+
+test('undo and redo are drawer-only and sync entire pen gestures to all players', async () => {
+  const ctx=fakeContext(),room=new GameRoom(ctx,{});await ctx.ready;room.game.created=true;
+  const a=new FakeSocket(),b=new FakeSocket();ctx.sockets.push(a,b);
+  await room.webSocketMessage(a,JSON.stringify({type:'join',protocol:2,name:'Alice',token:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'}));
+  await room.webSocketMessage(b,JSON.stringify({type:'join',protocol:2,name:'Bob',token:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'}));
+  await room.webSocketMessage(a,JSON.stringify({type:'start'}));
+  const artist=room.game.drawer===latest(a,'joined').id?a:b,viewer=artist===a?b:a;
+  await room.webSocketMessage(artist,JSON.stringify({type:'choose',word:room.game.options[0]}));
+  const ink=(id,count)=>room.webSocketMessage(artist,JSON.stringify({type:'strokes',color:'#000000',size:5,gesture:id,p:Array.from({length:count},()=>[.1,.1,.2,.2]).flat()}));
+  await ink('11111111-1111-4111-8111-111111111111',3);
+  await ink('11111111-1111-4111-8111-111111111111',2);
+  await ink('22222222-2222-4222-8222-222222222222',2);
+  assert.equal(room.game.strokes.length,7);
+  await room.webSocketMessage(viewer,JSON.stringify({type:'undo'}));
+  assert.equal(room.game.strokes.length,7,'guesser cannot undo');
+  await room.webSocketMessage(artist,JSON.stringify({type:'undo'}));
+  assert.equal(room.game.strokes.length,5);
+  assert.equal(latest(viewer,'state').strokes.length,5,'viewer receives accurate canvas');
+  await room.webSocketMessage(artist,JSON.stringify({type:'undo'}));
+  assert.equal(room.game.strokes.length,0,'all packets for a long gesture are removed');
+  await room.webSocketMessage(artist,JSON.stringify({type:'redo'}));
+  assert.equal(room.game.strokes.length,5);
+  await room.webSocketMessage(artist,JSON.stringify({type:'redo'}));
+  assert.equal(room.game.strokes.length,7);
+  await room.webSocketMessage(artist,JSON.stringify({type:'undo'}));
+  await ink('33333333-3333-4333-8333-333333333333',1);
+  await room.webSocketMessage(artist,JSON.stringify({type:'redo'}));
+  assert.equal(room.game.strokes.length,6,'drawing new ink cancels redo');
+  await room.webSocketMessage(artist,JSON.stringify({type:'clear'}));
+  assert.equal(room.game.strokes.length,0);
+  assert.deepEqual(room.game.redoStrokes,[]);
+  await room.webSocketMessage(artist,JSON.stringify({type:'redo'}));
+  assert.equal(room.game.strokes.length,0,'redo after clear is harmless');
+});
