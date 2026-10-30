@@ -4,7 +4,7 @@ const canvas = $('draw-canvas');
 const ctx = canvas.getContext('2d');
 const app = {
   code: null, socket: null, state: null, me: null, token: null, drawing: false,
-  color: COLORS[0], lastPoint: null, lastDrawAt: 0, stopped: false, attempts: 0,
+  color: COLORS[0], lastPoint: null, drawPointerId: null, pendingStrokes: [], pendingStyle: null, flushTimer: null, canvasEpoch: null, stopped: false, attempts: 0,
   chatFingerprint: '', toastTimer: null
 };
 $('nickname').value = localStorage.getItem('dd:nickname') || '';
@@ -30,7 +30,7 @@ function setBusy(busy) {
   $('join-room').disabled = busy;
 }
 function send(message) {
-  if (app.socket?.readyState === WebSocket.OPEN) app.socket.send(JSON.stringify(message));
+  if (app.socket?.readyState === WebSocket.OPEN && app.socket.bufferedAmount < 256 * 1024) app.socket.send(JSON.stringify(message));
 }
 async function createRoom() {
   setBusy(true); $('landing-error').hidden = true;
@@ -49,7 +49,7 @@ function joinRoom() {
   enterRoom(code);
 }
 function enterRoom(code) {
-  app.stopped = false; app.code = code; app.attempts = 0; app.state = null; app.me = null;
+  app.stopped = false; app.code = code; app.attempts = 0; app.state = null; app.me = null; app.canvasEpoch = null; discardPending();
   app.token = sessionStorage.getItem('dd:token:' + code) || crypto.randomUUID();
   sessionStorage.setItem('dd:token:' + code, app.token);
   $('landing').hidden = true; $('game-screen').hidden = false;
@@ -65,7 +65,7 @@ function connect() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${scheme}//${location.host}/api/rooms/${app.code}/ws`);
   app.socket = ws;
-  ws.onopen = () => { app.attempts = 0; send({ type: 'join', name: nickname(), token: app.token }); };
+  ws.onopen = () => { app.attempts = 0; send({ type: 'join', protocol: 2, name: nickname(), token: app.token }); };
   ws.onmessage = (event) => {
     let packet; try { packet = JSON.parse(event.data); } catch { return; }
     if (packet.type === 'joined') {
@@ -75,8 +75,10 @@ function connect() {
       app.state = packet; render();
     } else if (packet.type === 'stroke') {
       if (app.state?.drawer !== app.me) stroke(packet.stroke);
+    } else if (packet.type === 'strokes') {
+      if (app.state?.drawer !== app.me) strokeBatch(packet);
     } else if (packet.type === 'clear') {
-      renderCanvas([]);
+      discardPending(); app.canvasEpoch = packet.canvasEpoch; renderCanvas([]);
     } else if (packet.type === 'message') {
       if (app.state) {
         app.state.messages.push(packet.message);
@@ -88,6 +90,7 @@ function connect() {
     }
   };
   ws.onclose = (ev) => {
+    discardPending();
     if (app.stopped || app.socket !== ws) return;
     if (ev.code === 1008) return leaveRoom('Room is full or unavailable.');
     if (++app.attempts > 6) return leaveRoom('Connection failed. Please try joining again.');
@@ -97,7 +100,7 @@ function connect() {
   ws.onerror = () => { /* onclose performs retries and reports failures */ };
 }
 function leaveRoom(message) {
-  app.stopped = true;
+  app.stopped = true; discardPending();
   if (app.socket) { app.socket.onclose = null; app.socket.close(); }
   app.socket = null; app.state = null; app.code = null; app.me = null;
   $('landing').hidden = false; $('game-screen').hidden = true;
@@ -146,7 +149,13 @@ function render() {
   const winner = [...s.players].sort((a,b) => b.score - a.score)[0];
   $('winner-text').textContent = winner ? `🥇 ${winner.name} wins with ${winner.score} points!` : 'Thanks for playing!';
   $('chat-input').placeholder = myPlayer?.guessed ? 'You guessed it! Chat away…' : (s.phase === 'drawing' ? 'Type your guess…' : 'Say something…');
-  renderPlayers(); renderCanvas(s.strokes); renderMessages(); updateClock();
+  // Only snapshots and a new canvas epoch require a full repaint.
+  if (Array.isArray(s.strokes)) {
+    discardPending(); renderCanvas(s.strokes); app.canvasEpoch = s.canvasEpoch;
+  } else if (app.canvasEpoch !== s.canvasEpoch) {
+    discardPending(); renderCanvas([]); app.canvasEpoch = s.canvasEpoch;
+  }
+  renderPlayers(); renderMessages(); updateClock();
 }
 function renderPlayers() {
   const s = app.state, list = $('player-list'); list.replaceChildren();
@@ -198,34 +207,106 @@ function stroke(segment) {
   ctx.lineTo(x2 * canvas.width, y2 * canvas.height);
   ctx.stroke();
 }
+function strokeBatch(packet) {
+  if (!Array.isArray(packet.p) || packet.p.length % 4 !== 0) return;
+  for (let i = 0; i < packet.p.length; i += 4) {
+    stroke({ p: packet.p.slice(i, i + 4), color: packet.color, size: packet.size });
+  }
+}
 function renderCanvas(segments) {
   ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
   for (const segment of segments || []) stroke(segment);
 }
-function point(ev) {
-  const rect = canvas.getBoundingClientRect();
-  return [Math.min(1, Math.max(0, (ev.clientX-rect.left)/rect.width)), Math.min(1, Math.max(0,(ev.clientY-rect.top)/rect.height))];
+function point(ev, rect) {
+  const clamp = n => Math.round(Math.min(1, Math.max(0, n)) * 10000) / 10000;
+  return [clamp((ev.clientX - rect.left) / rect.width), clamp((ev.clientY - rect.top) / rect.height)];
 }
-function draw(ev, force = false) {
-  if (!app.drawing || app.state?.drawer !== app.me || app.state?.phase !== 'drawing') return;
-  const now = performance.now();
-  if (!force && now - app.lastDrawAt < 24) return;
-  const next = point(ev), last = app.lastPoint || next;
-  const seg = { p: [...last, ...next], color: app.color, size: +$('brush-size').value };
-  app.lastPoint = next; app.lastDrawAt = now;
-  stroke(seg); send({ type: 'stroke', ...seg });
+function discardPending() {
+  if (app.flushTimer) clearTimeout(app.flushTimer);
+  app.flushTimer = null; app.pendingStrokes = []; app.pendingStyle = null;
+  app.drawing = false; app.drawPointerId = null; app.lastPoint = null;
+}
+function flushStrokes() {
+  if (app.flushTimer) clearTimeout(app.flushTimer);
+  app.flushTimer = null;
+  if (!app.pendingStrokes.length) return;
+  if (!app.socket || app.socket.readyState !== WebSocket.OPEN) return discardPending();
+  // Compact packets are capped below the server's 3 KiB message limit.
+  while (app.pendingStrokes.length && app.socket.bufferedAmount < 128 * 1024) {
+    const p = app.pendingStrokes.splice(0, 48).flat();
+    send({ type: 'strokes', p, color: app.pendingStyle.color, size: app.pendingStyle.size });
+  }
+  if (app.pendingStrokes.length && app.pendingStrokes.length > 500) {
+    app.socket.close(1013, 'Drawing connection overloaded');
+    return discardPending();
+  }
+  if (app.pendingStrokes.length) app.flushTimer = setTimeout(flushStrokes, 33);
+  else app.pendingStyle = null;
+}
+function queueStroke(a, b, color, size) {
+  if (app.pendingStyle && (app.pendingStyle.color !== color || app.pendingStyle.size !== size)) {
+    flushStrokes();
+    if (app.pendingStrokes.length) {
+      app.socket?.close(1013, 'Slow drawing connection');
+      return discardPending();
+    }
+  }
+  app.pendingStyle = { color, size };
+  app.pendingStrokes.push([...a, ...b]);
+  if (!app.flushTimer) app.flushTimer = setTimeout(flushStrokes, 20);
+}
+function drawEvents(ev) {
+  if (!app.drawing || app.drawPointerId !== ev.pointerId ||
+      app.state?.drawer !== app.me || app.state?.phase !== 'drawing') return;
+  const rect = canvas.getBoundingClientRect();
+  const samples = typeof ev.getCoalescedEvents === 'function' ? ev.getCoalescedEvents() : [];
+  const events = samples.length ? samples : [ev];
+  for (const sample of events) {
+    const next = point(sample, rect), last = app.lastPoint || next;
+    // Preserve smooth curves while dropping redundant subpixel samples.
+    const distance = Math.hypot((next[0] - last[0]) * canvas.width, (next[1] - last[1]) * canvas.height);
+    if (distance < 1.2 && next !== last) continue;
+    const color = app.color, size = +$('brush-size').value;
+    stroke({ p: [...last, ...next], color, size });
+    queueStroke(last, next, color, size);
+    app.lastPoint = next;
+  }
+}
+function finishDraw(ev) {
+  if (!app.drawing || app.drawPointerId !== ev.pointerId) return;
+  const next = point(ev, canvas.getBoundingClientRect());
+  const last = app.lastPoint || next;
+  const color = app.color, size = +$('brush-size').value;
+  stroke({ p: [...last, ...next], color, size });
+  queueStroke(last, next, color, size);
+  flushStrokes();
+  app.drawing = false; app.lastPoint = null; app.drawPointerId = null;
+  if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
 }
 function installCanvas() {
   canvas.addEventListener('pointerdown', ev => {
-    if (app.state?.drawer !== app.me || app.state?.phase !== 'drawing') return;
-    ev.preventDefault(); app.drawing = true; canvas.setPointerCapture(ev.pointerId);
-    app.lastPoint = point(ev); draw(ev, true);
+    if (app.state?.drawer !== app.me || app.state?.phase !== 'drawing' || app.drawing) return;
+    ev.preventDefault(); app.drawing = true; app.drawPointerId = ev.pointerId;
+    canvas.setPointerCapture(ev.pointerId);
+    app.lastPoint = point(ev, canvas.getBoundingClientRect());
+    const color = app.color, size = +$('brush-size').value;
+    // Dots must work without any pointermove event.
+    stroke({ p: [...app.lastPoint, ...app.lastPoint], color, size });
+    queueStroke(app.lastPoint, app.lastPoint, color, size);
   });
-  canvas.addEventListener('pointermove', ev => { if (app.drawing) { ev.preventDefault(); draw(ev); } });
-  ['pointerup','pointercancel','lostpointercapture'].forEach(event => canvas.addEventListener(event, ev => {
-    if (app.drawing && event === 'pointerup') draw(ev,true);
-    app.drawing = false; app.lastPoint = null;
-  }));
+  canvas.addEventListener('pointermove', ev => {
+    if (!app.drawing) return;
+    ev.preventDefault(); drawEvents(ev);
+  });
+  canvas.addEventListener('pointerup', finishDraw);
+  canvas.addEventListener('pointercancel', ev => {
+    if (app.drawPointerId !== ev.pointerId) return;
+    flushStrokes(); app.drawing = false; app.lastPoint = null; app.drawPointerId = null;
+  });
+  canvas.addEventListener('lostpointercapture', ev => {
+    if (app.drawPointerId !== ev.pointerId) return;
+    flushStrokes(); app.drawing = false; app.lastPoint = null; app.drawPointerId = null;
+  });
 }
 function installPalette() {
   for (const color of COLORS) {
@@ -257,7 +338,7 @@ $('start-game').addEventListener('click', () => send({ type: 'start' }));
 $('play-again').addEventListener('click', () => send({ type: 'start' }));
 $('rounds-select').addEventListener('change', () => send({ type: 'settings', rounds: +$('rounds-select').value, seconds: +$('seconds-select').value }));
 $('seconds-select').addEventListener('change', () => send({ type: 'settings', rounds: +$('rounds-select').value, seconds: +$('seconds-select').value }));
-$('clear-tool').addEventListener('click', () => { if (confirm('Clear the whole canvas?')) send({ type: 'clear' }); });
+$('clear-tool').addEventListener('click', () => { if (confirm('Clear the whole canvas?')) { flushStrokes(); send({ type: 'clear' }); } });
 $('eraser-tool').addEventListener('click', () => {
   app.color = '#ffffff';
   document.querySelectorAll('.color-swatch').forEach(el => el.classList.remove('selected'));
