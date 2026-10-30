@@ -5,7 +5,7 @@ const ctx = canvas.getContext('2d');
 const app = {
   code: null, socket: null, state: null, me: null, token: null, drawing: false,
   color: COLORS[0], lastPoint: null, drawPointerId: null, pendingStrokes: [], pendingStyle: null, flushTimer: null, canvasEpoch: null, stopped: false, attempts: 0,
-  chatFingerprint: '', toastTimer: null, privacyTurn: null, hideArtistWord: false, hideRevealWord: true
+  chatFingerprint: '', toastTimer: null, privacyTurn: null, hideArtistWord: false, hideRevealWord: true, activeGesture: null
 };
 $('nickname').value = localStorage.getItem('dd:nickname') || '';
 const queryRoom = new URLSearchParams(window.location.search).get('room');
@@ -245,7 +245,7 @@ function point(ev, rect) {
 function discardPending() {
   if (app.flushTimer) clearTimeout(app.flushTimer);
   app.flushTimer = null; app.pendingStrokes = []; app.pendingStyle = null;
-  app.drawing = false; app.drawPointerId = null; app.lastPoint = null;
+  app.drawing = false; app.drawPointerId = null; app.lastPoint = null; app.activeGesture = null;
 }
 function flushStrokes() {
   if (app.flushTimer) clearTimeout(app.flushTimer);
@@ -255,7 +255,7 @@ function flushStrokes() {
   // Compact packets are capped below the server's 3 KiB message limit.
   while (app.pendingStrokes.length && app.socket.bufferedAmount < 128 * 1024) {
     const p = app.pendingStrokes.splice(0, 48).flat();
-    send({ type: 'strokes', p, color: app.pendingStyle.color, size: app.pendingStyle.size });
+    send({ type: 'strokes', p, color: app.pendingStyle.color, size: app.pendingStyle.size, gesture: app.pendingStyle.gesture });
   }
   if (app.pendingStrokes.length && app.pendingStrokes.length > 500) {
     app.socket.close(1013, 'Drawing connection overloaded');
@@ -264,15 +264,15 @@ function flushStrokes() {
   if (app.pendingStrokes.length) app.flushTimer = setTimeout(flushStrokes, 33);
   else app.pendingStyle = null;
 }
-function queueStroke(a, b, color, size) {
-  if (app.pendingStyle && (app.pendingStyle.color !== color || app.pendingStyle.size !== size)) {
+function queueStroke(a, b, color, size, gesture = app.activeGesture) {
+  if (app.pendingStyle && (app.pendingStyle.color !== color || app.pendingStyle.size !== size || app.pendingStyle.gesture !== gesture)) {
     flushStrokes();
     if (app.pendingStrokes.length) {
       app.socket?.close(1013, 'Slow drawing connection');
       return discardPending();
     }
   }
-  app.pendingStyle = { color, size };
+  app.pendingStyle = { color, size, gesture };
   app.pendingStrokes.push([...a, ...b]);
   if (!app.flushTimer) app.flushTimer = setTimeout(flushStrokes, 20);
 }
@@ -301,13 +301,13 @@ function finishDraw(ev) {
   stroke({ p: [...last, ...next], color, size });
   queueStroke(last, next, color, size);
   flushStrokes();
-  app.drawing = false; app.lastPoint = null; app.drawPointerId = null;
+  app.drawing = false; app.lastPoint = null; app.drawPointerId = null; app.activeGesture = null;
   if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
 }
 function installCanvas() {
   canvas.addEventListener('pointerdown', ev => {
     if (app.state?.drawer !== app.me || app.state?.phase !== 'drawing' || app.drawing) return;
-    ev.preventDefault(); app.drawing = true; app.drawPointerId = ev.pointerId;
+    ev.preventDefault(); app.drawing = true; app.drawPointerId = ev.pointerId; app.activeGesture = crypto.randomUUID();
     canvas.setPointerCapture(ev.pointerId);
     app.lastPoint = point(ev, canvas.getBoundingClientRect());
     const color = app.color, size = +$('brush-size').value;
@@ -322,12 +322,20 @@ function installCanvas() {
   canvas.addEventListener('pointerup', finishDraw);
   canvas.addEventListener('pointercancel', ev => {
     if (app.drawPointerId !== ev.pointerId) return;
-    flushStrokes(); app.drawing = false; app.lastPoint = null; app.drawPointerId = null;
+    flushStrokes(); app.drawing = false; app.lastPoint = null; app.drawPointerId = null; app.activeGesture = null;
   });
   canvas.addEventListener('lostpointercapture', ev => {
     if (app.drawPointerId !== ev.pointerId) return;
-    flushStrokes(); app.drawing = false; app.lastPoint = null; app.drawPointerId = null;
+    flushStrokes(); app.drawing = false; app.lastPoint = null; app.drawPointerId = null; app.activeGesture = null;
   });
+}
+function editCanvas(action) {
+  if (!['undo','redo'].includes(action) || app.state?.drawer !== app.me || app.state?.phase !== 'drawing') return;
+  if (app.drawing) { toast('Lift your pen before editing.'); return; }
+  // Flush pending ink first: WebSocket preserves send order.
+  flushStrokes();
+  if (app.pendingStrokes.length) { toast('Syncing drawing; try again.'); return; }
+  send({ type: action });
 }
 function installPalette() {
   for (const color of COLORS) {
@@ -369,6 +377,14 @@ $('start-game').addEventListener('click', () => send({ type: 'start' }));
 $('play-again').addEventListener('click', () => send({ type: 'start' }));
 $('rounds-select').addEventListener('change', () => send({ type: 'settings', rounds: +$('rounds-select').value, seconds: +$('seconds-select').value }));
 $('seconds-select').addEventListener('change', () => send({ type: 'settings', rounds: +$('rounds-select').value, seconds: +$('seconds-select').value }));
+$('undo-tool').addEventListener('click', () => editCanvas('undo'));
+$('redo-tool').addEventListener('click', () => editCanvas('redo'));
+document.addEventListener('keydown', ev => {
+  if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+  const key = ev.key.toLowerCase();
+  if (key === 'z') { ev.preventDefault(); editCanvas(ev.shiftKey ? 'redo' : 'undo'); }
+  else if (key === 'y') { ev.preventDefault(); editCanvas('redo'); }
+});
 $('clear-tool').addEventListener('click', () => { if (confirm('Clear the whole canvas?')) { flushStrokes(); send({ type: 'clear' }); } });
 $('eraser-tool').addEventListener('click', () => {
   app.color = '#ffffff';
