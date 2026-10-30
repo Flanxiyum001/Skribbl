@@ -7,6 +7,8 @@ An original Skribbl-style browser party game with private rooms. Runs as one **N
 - Shareable 6-character rooms for up to 12 players
 - Coalesced pen sampling, compact batched drawing messages and instant local ink
 - Full canvas snapshots only for joins/reconnects, with incremental updates
+- Expanded word bank with 716 unique drawing prompts
+- Synced Undo / Redo by whole pen gesture, with Ctrl/Cmd+Z and Ctrl+Y shortcuts
 - Colors, eraser and brush sizes
 - Secret words, drawing turns, hints, scoring, leaderboard and chat
 - Host controls, automatic turn timers, reconnect and mobile layout

@@ -7,8 +7,8 @@
   <meta name="description" content="DoodleDash — private drawing and guessing games with your favorite people." />
   <title>DoodleDash — Draw. Guess. Repeat.</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css?v=4" />
-  <script src="/app.js?v=4" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=5" />
+  <script src="/app.js?v=5" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -59,7 +59,7 @@
           <div id="reveal-overlay" class="canvas-overlay soft-overlay" hidden><div class="overlay-art">🎉</div><h2 id="reveal-title">Nice drawing!</h2><p id="reveal-word">Answer hidden for privacy.</p><button id="reveal-privacy-toggle" type="button" class="privacy-button privacy-reveal-button" aria-pressed="false">👁 Show answer</button></div>
           <div id="end-overlay" class="canvas-overlay" hidden><div class="overlay-art">🏆</div><h2>That's a wrap!</h2><p id="winner-text"></p><button id="play-again" class="btn btn-primary" hidden>↻ Play again</button></div>
         </div>
-        <div id="drawing-tools" class="toolbar" hidden><div class="colors" id="color-palette" aria-label="Drawing colors"></div><div class="tool-divider"></div><button id="eraser-tool" class="tool-btn" title="Eraser" aria-label="Eraser">◻</button><button id="clear-tool" class="tool-btn" title="Clear canvas" aria-label="Clear canvas">🗑</button><label class="size-label">BRUSH <input id="brush-size" type="range" min="2" max="30" value="5" aria-label="Brush size" /></label></div>
+        <div id="drawing-tools" class="toolbar" hidden><div class="colors" id="color-palette" aria-label="Drawing colors"></div><div class="tool-divider"></div><button id="eraser-tool" class="tool-btn" title="Eraser" aria-label="Eraser">◻</button><button id="undo-tool" class="tool-btn" type="button" title="Undo last stroke (Ctrl+Z)" aria-label="Undo last stroke">↶</button><button id="redo-tool" class="tool-btn" type="button" title="Redo stroke (Ctrl+Y)" aria-label="Redo stroke">↷</button><button id="clear-tool" class="tool-btn" type="button" title="Clear canvas" aria-label="Clear canvas">🗑</button><label class="size-label">BRUSH <input id="brush-size" type="range" min="2" max="30" value="5" aria-label="Brush size" /></label></div>
         <div id="spectator-tip" class="canvas-footnote">✦ Watch the drawing, then type your guess into the chat!</div>
       </section>
       <aside class="panel chat-panel"><div class="panel-head"><h3>💬 Room chat</h3><span class="mini-badge">LIVE</span></div><div id="chat-feed" class="chat-feed" role="log" aria-live="polite" aria-relevant="additions"></div><form id="chat-form" class="chat-form"><input id="chat-input" placeholder="Type your guess..." autocomplete="off" maxlength="120" aria-label="Chat message or guess" /><button type="submit" title="Send" aria-label="Send">➜</button></form><div class="chat-hint">Be quick! Faster guesses = more points.</div></aside>

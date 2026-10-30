@@ -12,3 +12,7 @@
 .privacy-reveal-button{background:#7361d5;border-color:#7361d5;color:#fff;padding:10px 15px}
 .canvas-topline{height:auto;min-height:62px;gap:10px}
 @media(max-width:740px){.privacy-button{padding:6px 8px;font-size:10px}.word-line{gap:6px}.canvas-topline{min-height:65px}}
+
+/* Undo/Redo controls fit into the responsive drawing toolbar. */
+#undo-tool,#redo-tool{font-size:23px;font-weight:700;line-height:1;min-width:39px;min-height:39px;touch-action:manipulation}
+#undo-tool:hover,#redo-tool:hover{background:rgba(159,132,255,.25)}
