@@ -9,7 +9,7 @@ const COLOR_SET = new Set(['#ffffff','#000000','#f87171','#fb923c','#fbbf24','#a
 const defaultGame = () => ({
   created: false, host: null, players: [], phase: 'lobby', settings: { rounds: 3, seconds: 80 },
   round: 0, turn: 0, order: [], drawer: null, options: [], answer: '', lastWord: '', hintStage: 0,
-  endsAt: 0, hintCount: 0, canvasEpoch: 0, strokes: [], messages: [], guessedCount: 0
+  endsAt: 0, hintCount: 0, canvasEpoch: 0, strokes: [], redoStrokes: [], messages: [], guessedCount: 0
 });
 const safeName = (s) => String(s || 'Guest').trim().replace(/[<>\x00-\x1f]/g, '').slice(0, 18) || 'Guest';
 // Disconnect slow consumers so they can resync the authoritative canvas.
@@ -76,6 +76,12 @@ export class GameRoom {
     };
   }
   // Scoreboard and hint updates should not repaint the complete drawing.
+  syncCanvas() {
+    for (const ws of this.ctx.getWebSockets()) {
+      const pid = ws.deserializeAttachment()?.pid;
+      if (pid) send(ws, this.stateFor(pid, true));
+    }
+  }
   sync(snapshotSocket = null) {
     for (const ws of this.ctx.getWebSockets()) {
       const pid = ws.deserializeAttachment()?.pid;
@@ -175,16 +181,39 @@ export class GameRoom {
         ws.serializeAttachment(attachment); return;
       }
       ws.serializeAttachment(attachment);
+      // One pointer-down to pointer-up movement is one reversible gesture.
+      // Legacy clients missing gesture IDs still get packet-level undo.
+      const gesture = typeof m.gesture === 'string' && /^[a-f0-9-]{36}$/i.test(m.gesture) ? m.gesture : crypto.randomUUID();
+      g.redoStrokes = [];
       for (let i = 0; i < p.length; i += 4) {
-        g.strokes.push({ p: p.slice(i, i + 4), color, size });
+        g.strokes.push({ p: p.slice(i, i + 4), color, size, gesture });
       }
       this.broadcastStrokes(p, color, size);
       this.pendingStrokes += count;
       if (this.pendingStrokes >= 150) { this.pendingStrokes = 0; await this.persist(); }
       return;
     }
+    if (m.type === 'undo' && g.phase === 'drawing' && g.drawer === pid && g.strokes.length) {
+      const gesture = g.strokes.at(-1).gesture;
+      let start = g.strokes.length - 1;
+      while (start > 0 && g.strokes[start - 1].gesture === gesture) start--;
+      (g.redoStrokes ||= []).push(g.strokes.splice(start));
+      if (g.redoStrokes.length > 50) g.redoStrokes.shift();
+      g.canvasEpoch = (g.canvasEpoch || 0) + 1;
+      this.pendingStrokes = 0;
+      await this.persist(); this.syncCanvas(); return;
+    }
+    if (m.type === 'redo' && g.phase === 'drawing' && g.drawer === pid && g.redoStrokes?.length) {
+      const restored = g.redoStrokes.at(-1);
+      if (g.strokes.length + restored.length > MAX_STROKES) return;
+      g.redoStrokes.pop();
+      g.strokes.push(...restored);
+      g.canvasEpoch = (g.canvasEpoch || 0) + 1;
+      this.pendingStrokes = 0;
+      await this.persist(); this.syncCanvas(); return;
+    }
     if (m.type === 'clear' && g.phase === 'drawing' && g.drawer === pid) {
-      g.strokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
+      g.strokes = []; g.redoStrokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
       attachment.limitWarned = false; ws.serializeAttachment(attachment);
       await this.persist(); this.broadcast({ type: 'clear', canvasEpoch: g.canvasEpoch }); return;
     }
@@ -236,7 +265,7 @@ export class GameRoom {
     if (g.turn >= g.order.length * g.settings.rounds) return this.nextTurn();
     g.round = Math.floor(g.turn / g.order.length) + 1;
     g.drawer = g.order[g.turn % g.order.length]; g.turn++;
-    g.answer = ''; g.options = pickWords(); g.hintCount = 0; g.hintStage = 0; g.guessedCount = 0; g.strokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
+    g.answer = ''; g.options = pickWords(); g.hintCount = 0; g.hintStage = 0; g.guessedCount = 0; g.strokes = []; g.redoStrokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
     for (const p of g.players) p.guessed = false;
     await this.setPhase('choosing', 15);
     this.announce(`${g.players.find(p => p.id === g.drawer)?.name || 'Someone'} is choosing a word…`);
