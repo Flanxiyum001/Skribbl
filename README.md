@@ -5,7 +5,9 @@ An original Skribbl-style browser party game with private rooms. Runs as one **N
 ## Features
 
 - Shareable 6-character rooms for up to 12 players
-- Real-time canvas, colors, eraser and brush sizes
+- Coalesced pen sampling, compact batched drawing messages and instant local ink
+- Full canvas snapshots only for joins/reconnects, with incremental updates
+- Colors, eraser and brush sizes
 - Secret words, drawing turns, hints, scoring, leaderboard and chat
 - Host controls, automatic turn timers, reconnect and mobile layout
 
@@ -40,3 +42,7 @@ Manual setup: New → Web Service → repo `Flanxiyum001/Skribbl`, branch `main`
 ## Tests
 
 `npm run check` validates code and game logic. `npm run smoke` exercises real WebSocket multiplayer against a running local Node server. GitHub Actions runs both.
+
+## Production readiness scope
+
+This release is optimized and guarded for small private groups on a **single Render instance**. It limits malformed stroke messages, room creation, socket buffering and stored canvas history. It does **not** include a persistent database, account authentication, moderation or horizontally scalable rooms. Render Free sleeps and clears in-memory rooms after restarts.
