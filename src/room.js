@@ -9,7 +9,8 @@ const COLOR_SET = new Set(['#ffffff','#000000','#f87171','#fb923c','#fbbf24','#a
 const defaultGame = () => ({
   created: false, host: null, players: [], phase: 'lobby', settings: { rounds: 3, seconds: 80 },
   round: 0, turn: 0, order: [], drawer: null, options: [], answer: '', lastWord: '', hintStage: 0,
-  endsAt: 0, hintCount: 0, canvasEpoch: 0, strokes: [], redoStrokes: [], messages: [], guessedCount: 0
+  endsAt: 0, hintCount: 0, canvasEpoch: 0, strokes: [], redoStrokes: [], messages: [], guessedCount: 0,
+  reactions: { like: [], dislike: [] }, kickVotes: {}, kickedTokens: []
 });
 const safeName = (s) => String(s || 'Guest').trim().replace(/[<>\x00-\x1f]/g, '').slice(0, 18) || 'Guest';
 // Disconnect slow consumers so they can resync the authoritative canvas.
@@ -63,6 +64,13 @@ export class GameRoom {
   stateFor(pid, includeCanvas = false) {
     const g = this.game;
     const me = g.players.find(p => p.id === pid);
+    const online = g.players.filter(live);
+    const required = Math.max(2, Math.ceil((online.length - 1) * 2 / 3));
+    const kickVotes = Object.fromEntries(online.map(target => {
+      const voters = (g.kickVotes?.[target.id] || []).filter(id => id !== target.id && online.some(p => p.id === id));
+      return [target.id, { count: voters.length, required, mine: voters.includes(pid) }];
+    }));
+    const likes = g.reactions?.like || [], dislikes = g.reactions?.dislike || [];
     // A correct guess never sends the secret answer back over the wire. Only the artist sees it during drawing.
     const canSeeWord = g.phase === 'reveal' || g.phase === 'ended' || (g.phase === 'drawing' && g.drawer === pid);
     return {
@@ -72,6 +80,9 @@ export class GameRoom {
       masked: g.phase === 'drawing' ? (me?.guessed ? '••••••' : hiddenWord(g.answer, g.hintCount)) : '',
       wordLength: g.answer.length, options: g.phase === 'choosing' && g.drawer === pid ? g.options : [],
       players: g.players.map(({ id, name, score, connected, guessed }) => ({ id, name, score, connected, guessed, spectator: g.phase !== 'lobby' && !g.order.includes(id) })),
+      reactions: { like: likes.length, dislike: dislikes.length,
+        mine: likes.includes(pid) ? 'like' : dislikes.includes(pid) ? 'dislike' : null },
+      canVoteKick: online.length >= 3, kickVotes,
       canvasEpoch: g.canvasEpoch || 0, ...(includeCanvas ? { strokes: g.strokes } : {}), messages: g.messages
     };
   }
@@ -121,6 +132,11 @@ export class GameRoom {
     if (m.type === 'join') {
       if (attachment.pid) return;
       const token = typeof m.token === 'string' && /^[a-f0-9-]{36}$/i.test(m.token) ? m.token : crypto.randomUUID();
+      if ((this.game.kickedTokens || []).includes(token)) {
+        send(ws, { type: 'kicked', message: 'You were removed by a room vote.' });
+        ws.close(4003, 'Voted out');
+        return;
+      }
       let player = this.game.players.find(p => p.token === token);
       if (!player) {
         if (this.game.players.filter(live).length >= MAX_PLAYERS) { send(ws, { type: 'error', message: 'This room is full (12 players).' }); ws.close(1008, 'room full'); return; }
@@ -144,6 +160,39 @@ export class GameRoom {
     const player = this.game.players.find(p => p.id === pid && p.connected);
     if (!player) return;
     const g = this.game;
+    if (m.type === 'react') {
+      if (!['drawing', 'reveal'].includes(g.phase) || g.drawer === pid ||
+          (m.value !== 'like' && m.value !== 'dislike')) return;
+      const votes = { like: [...(g.reactions?.like || [])], dislike: [...(g.reactions?.dislike || [])] };
+      const votedAlready = votes[m.value].includes(pid);
+      votes.like = votes.like.filter(id => id !== pid);
+      votes.dislike = votes.dislike.filter(id => id !== pid);
+      if (!votedAlready) votes[m.value].push(pid); // Same button toggles off; opposite button switches.
+      g.reactions = votes;
+      await this.persist(); this.sync(); return;
+    }
+    if (m.type === 'vote_kick') {
+      if (typeof m.target !== 'string' || m.target === pid) return;
+      const online = g.players.filter(live);
+      if (online.length < 3 || !online.some(p => p.id === m.target)) return;
+      const existing = g.kickVotes || {};
+      const votedAlready = (existing[m.target] || []).includes(pid);
+      const ballots = {};
+      // Each active player has at most one kick ballot, regardless of how often they click.
+      for (const target of online) {
+        const voters = (existing[target.id] || []).filter(id =>
+          id !== pid && id !== target.id && online.some(p => p.id === id));
+        if (voters.length) ballots[target.id] = [...new Set(voters)];
+      }
+      if (!votedAlready) ballots[m.target] = [...(ballots[m.target] || []), pid];
+      g.kickVotes = ballots;
+      const required = Math.max(2, Math.ceil((online.length - 1) * 2 / 3));
+      if ((ballots[m.target] || []).length >= required) {
+        await this.kickPlayer(m.target);
+        return;
+      }
+      await this.persist(); this.sync(); return;
+    }
     if (m.type === 'settings' && g.host === pid && (g.phase === 'lobby' || g.phase === 'ended')) {
       g.settings.rounds = Math.max(1, Math.min(6, Number.isFinite(+m.rounds) ? Math.floor(+m.rounds) : 3));
       g.settings.seconds = Math.max(45, Math.min(120, Number.isFinite(+m.seconds) ? Math.floor(+m.seconds) : 80));
@@ -155,7 +204,7 @@ export class GameRoom {
       g.players = active;
       for (const p of g.players) { p.score = 0; p.guessed = false; }
       g.order = active.map(p => p.id).sort(() => Math.random() - 0.5);
-      g.turn = 0; g.round = 0; g.lastWord = ''; g.messages = [];
+      g.turn = 0; g.round = 0; g.lastWord = ''; g.messages = []; g.kickVotes = {};
       await this.nextTurn(); return;
     }
     if (m.type === 'choose' && g.phase === 'choosing' && g.drawer === pid && g.options.includes(m.word)) {
@@ -245,6 +294,39 @@ export class GameRoom {
       this.broadcast({ type: 'message', message }); await this.persist(); return;
     }
   }
+  async kickPlayer(targetId) {
+    const g = this.game;
+    const target = g.players.find(p => p.id === targetId && p.connected);
+    if (!target) return;
+    const socket = this.socketFor(targetId);
+    g.kickedTokens ||= [];
+    if (typeof target.token === 'string' && !g.kickedTokens.includes(target.token)) {
+      g.kickedTokens.push(target.token);
+      g.kickedTokens = g.kickedTokens.slice(-200); // Bound room-local bans in memory.
+    }
+    g.players = g.players.filter(p => p.id !== targetId);
+    g.kickVotes = {};
+    g.reactions ||= { like: [], dislike: [] };
+    g.reactions.like = g.reactions.like.filter(id => id !== targetId);
+    g.reactions.dislike = g.reactions.dislike.filter(id => id !== targetId);
+    if (g.host === targetId) g.host = g.players.find(live)?.id || null;
+    if (socket) {
+      send(socket, { type: 'kicked', message: 'You were removed by a room vote.' });
+      socket.close(4003, 'Voted out');
+    }
+    this.announce(`${target.name} was removed by a room vote.`);
+    if (g.drawer === targetId && ['choosing', 'drawing'].includes(g.phase)) {
+      await this.reveal();
+      return;
+    }
+    if (!['lobby', 'ended'].includes(g.phase) && g.players.filter(live).length < 2) {
+      g.drawer = null; g.answer = ''; g.options = []; g.order = [];
+      await this.setPhase('lobby');
+      this.announce('Waiting for more players to continue.');
+      return;
+    }
+    await this.persist(); this.sync();
+  }
   async nextTurn() {
     const g = this.game;
     if (g.turn >= g.order.length * g.settings.rounds) {
@@ -266,6 +348,7 @@ export class GameRoom {
     g.round = Math.floor(g.turn / g.order.length) + 1;
     g.drawer = g.order[g.turn % g.order.length]; g.turn++;
     g.answer = ''; g.options = pickWords(); g.hintCount = 0; g.hintStage = 0; g.guessedCount = 0; g.strokes = []; g.redoStrokes = []; g.canvasEpoch = (g.canvasEpoch || 0) + 1; this.pendingStrokes = 0;
+    g.reactions = { like: [], dislike: [] };
     for (const p of g.players) p.guessed = false;
     await this.setPhase('choosing', 15);
     this.announce(`${g.players.find(p => p.id === g.drawer)?.name || 'Someone'} is choosing a word…`);
@@ -319,6 +402,15 @@ export class GameRoom {
     // A reconnect can have already replaced this socket; don't mark that player offline.
     if (this.ctx.getWebSockets().some(other => other !== ws && other.deserializeAttachment()?.pid === pid)) return;
     p.connected = false;
+    // Offline players and departed targets cannot hold kick votes open.
+    if (this.game.kickVotes) {
+      delete this.game.kickVotes[pid];
+      for (const [target, votes] of Object.entries(this.game.kickVotes)) {
+        const remaining = votes.filter(id => id !== pid);
+        if (remaining.length) this.game.kickVotes[target] = remaining;
+        else delete this.game.kickVotes[target];
+      }
+    }
     this.announce(`${p.name} disconnected`);
     if (this.game.host === pid) this.game.host = this.game.players.find(live)?.id || null;
     if (this.game.drawer === pid && ['choosing','drawing'].includes(this.game.phase)) await this.reveal();

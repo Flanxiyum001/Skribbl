@@ -85,6 +85,8 @@ function connect() {
         app.state.messages = app.state.messages.slice(-45);
         renderMessages();
       }
+    } else if (packet.type === 'kicked') {
+      leaveRoom(packet.message || 'You were removed by a room vote.');
     } else if (packet.type === 'error') {
       toast(packet.message);
     }
@@ -92,6 +94,7 @@ function connect() {
   ws.onclose = (ev) => {
     discardPending();
     if (app.stopped || app.socket !== ws) return;
+    if (ev.code === 4003) return leaveRoom('You were removed by a room vote.');
     if (ev.code === 1008) return leaveRoom('Room is full or unavailable.');
     if (++app.attempts > 6) return leaveRoom('Connection failed. Please try joining again.');
     toast('Connection lost. Reconnecting…');
@@ -152,6 +155,14 @@ function render() {
   $('drawing-tools').hidden = !amDrawing;
   $('spectator-tip').hidden = amDrawing;
   $('draw-canvas').classList.toggle('can-draw', amDrawing);
+  const canReact = ['drawing', 'reveal'].includes(s.phase) && !!s.drawer && s.drawer !== app.me;
+  $('drawing-reactions').hidden = !canReact;
+  for (const value of ['like', 'dislike']) {
+    const button = $('reaction-' + value);
+    $('reaction-' + value + '-count').textContent = String(s.reactions?.[value] || 0);
+    button.setAttribute('aria-pressed', String(s.reactions?.mine === value));
+    button.classList.toggle('selected', s.reactions?.mine === value);
+  }
   $('lobby-settings').hidden = !isHost;
   $('start-game').hidden = !isHost;
   $('start-game').disabled = active.length < 2;
@@ -187,7 +198,19 @@ function renderPlayers() {
     const details = document.createElement('div'); details.style.minWidth = '0';
     const name = document.createElement('span'); name.className = 'player-name'; name.textContent = p.name + (p.id === app.me ? ' (you)' : '');
     const score = document.createElement('span'); score.className = 'player-score'; score.textContent = `${p.score} pts` + (p.spectator ? ' · spectator' : '');
+    const ballot = s.kickVotes?.[p.id];
+    if (ballot?.count) score.textContent += ` · ⚑ ${ballot.count}/${ballot.required}`;
     details.append(name, score);
+    if (s.canVoteKick && p.connected && p.id !== app.me) {
+      const kick = document.createElement('button');
+      kick.type = 'button';
+      kick.className = 'kick-vote' + (ballot?.mine ? ' selected' : '');
+      kick.textContent = ballot?.mine ? '✓ Voted to kick' : '⚑ Vote to kick';
+      kick.setAttribute('aria-pressed', String(!!ballot?.mine));
+      kick.setAttribute('aria-label', `Vote to kick ${p.name}, ${ballot?.count || 0} of ${ballot?.required || 2} votes`);
+      kick.addEventListener('click', () => send({ type: 'vote_kick', target: p.id }));
+      details.appendChild(kick);
+    }
     const tag = document.createElement('span'); tag.className = 'player-tag'; tag.textContent = p.id === s.drawer ? '✏' : p.guessed ? '✓' : p.id === s.host ? '♛' : '';
     row.append(rank, avatar, details, tag); list.appendChild(row);
   });
@@ -370,6 +393,8 @@ $('reveal-privacy-toggle').addEventListener('click', () => {
   app.hideRevealWord = !app.hideRevealWord;
   render();
 });
+$('reaction-like').addEventListener('click', () => send({ type: 'react', value: 'like' }));
+$('reaction-dislike').addEventListener('click', () => send({ type: 'react', value: 'dislike' }));
 $('copy-link').addEventListener('click', copyInvite);
 $('invite-game').addEventListener('click', copyInvite);
 $('leave-room').addEventListener('click', () => leaveRoom());

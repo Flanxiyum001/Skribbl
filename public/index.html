@@ -7,8 +7,8 @@
   <meta name="description" content="DoodleDash — private drawing and guessing games with your favorite people." />
   <title>DoodleDash — Draw. Guess. Repeat.</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css?v=5" />
-  <script src="/app.js?v=5" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=6" />
+  <script src="/app.js?v=6" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -54,6 +54,11 @@
         <div class="canvas-topline"><div class="word-display"><small>THE WORD</small><div class="word-line"><strong id="word-display">Waiting for the game…</strong><button id="word-privacy-toggle" class="privacy-button" type="button" aria-pressed="false" title="Hide the secret word from nearby screens" hidden>🙈 Hide word</button></div></div><div class="timer" aria-live="off"><span>⏱</span><strong id="timer-display">--</strong><small>SEC</small></div></div>
         <div id="canvas-frame" class="canvas-frame">
           <canvas id="draw-canvas" width="960" height="600" aria-label="Shared drawing canvas"></canvas>
+          <div id="drawing-reactions" class="drawing-reactions" role="group" aria-label="Rate this drawing" hidden>
+            <span class="reaction-caption">RATE THIS DOODLE</span>
+            <button id="reaction-like" class="reaction-button" type="button" aria-label="Like this drawing" aria-pressed="false"><span aria-hidden="true">👍</span> <span id="reaction-like-count">0</span></button>
+            <button id="reaction-dislike" class="reaction-button" type="button" aria-label="Dislike this drawing" aria-pressed="false"><span aria-hidden="true">👎</span> <span id="reaction-dislike-count">0</span></button>
+          </div>
           <div id="canvas-overlay" class="canvas-overlay"><div class="overlay-art">✎</div><h2>Get your crew together!</h2><p>Invite a friend to start drawing and guessing.</p><div id="lobby-settings" class="lobby-settings" hidden><label>ROUNDS <select id="rounds-select"><option value="2">2 rounds</option><option value="3" selected>3 rounds</option><option value="4">4 rounds</option><option value="5">5 rounds</option><option value="6">6 rounds</option></select></label><label>DRAW TIME <select id="seconds-select"><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="80" selected>80 seconds</option><option value="100">100 seconds</option><option value="120">120 seconds</option></select></label></div><button id="start-game" class="btn btn-primary" hidden>🎉 Start game</button><button id="invite-game" class="btn btn-secondary">📋 Copy invite link</button></div>
           <div id="choose-overlay" class="canvas-overlay" hidden><div class="overlay-art">💭</div><h2 id="choose-title">Choose what to draw</h2><p id="choose-subtitle">Pick your word before the timer runs out.</p><div id="word-options" class="word-options"></div></div>
           <div id="reveal-overlay" class="canvas-overlay soft-overlay" hidden><div class="overlay-art">🎉</div><h2 id="reveal-title">Nice drawing!</h2><p id="reveal-word">Answer hidden for privacy.</p><button id="reveal-privacy-toggle" type="button" class="privacy-button privacy-reveal-button" aria-pressed="false">👁 Show answer</button></div>
