@@ -16,3 +16,16 @@
 /* Undo/Redo controls fit into the responsive drawing toolbar. */
 #undo-tool,#redo-tool{font-size:23px;font-weight:700;line-height:1;min-width:39px;min-height:39px;touch-action:manipulation}
 #undo-tool:hover,#redo-tool:hover{background:rgba(159,132,255,.25)}
+
+/* Per-drawing feedback stays above the canvas (including the round reveal). */
+.drawing-reactions{position:absolute;top:12px;right:12px;z-index:5;display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid #dad8ee;border-radius:13px;background:#fffffff0;box-shadow:0 8px 25px #28243f22;backdrop-filter:blur(12px);max-width:calc(100% - 24px)}
+.reaction-caption{font-size:9px;letter-spacing:1px;font-weight:800;color:#696882;margin:0 6px;white-space:nowrap}
+.reaction-button{display:flex;align-items:center;justify-content:center;gap:5px;min-width:45px;min-height:34px;border:1px solid #dfdced;border-radius:9px;background:#f4f2fb;color:#35324d;font-size:13px;font-weight:800;transition:background .15s,border-color .15s,transform .15s;touch-action:manipulation}
+.reaction-button:hover{background:#eae6ff;transform:translateY(-1px)}
+.reaction-button.selected{border-color:#8675ee;background:#e6e0ff;box-shadow:inset 0 0 0 1px #a69cf5}
+.reaction-button:focus-visible,.kick-vote:focus-visible{outline:3px solid #7b67f5;outline-offset:2px}
+.kick-vote{display:block;margin-top:6px;border:1px solid #595373;border-radius:7px;background:#32324c;color:#c9c3e8;font-weight:800;font-size:10px;line-height:1.3;padding:5px 7px;white-space:nowrap;touch-action:manipulation}
+.kick-vote:hover{background:#494065;border-color:#9687cf}
+.kick-vote.selected{background:#544064;border-color:#bf91bb;color:#ffe0fa}
+.player-score{overflow-wrap:anywhere}
+@media(max-width:740px){.drawing-reactions{top:7px;right:7px;padding:4px;gap:4px}.reaction-caption{display:none}.reaction-button{min-width:43px;min-height:32px}.kick-vote{font-size:9px;padding:5px}.player{width:170px}.player-name{max-width:98px}}

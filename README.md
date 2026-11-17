@@ -10,6 +10,8 @@ An original Skribbl-style browser party game with private rooms. Runs as one **N
 - Expanded word bank with 716 unique drawing prompts
 - Synced Undo / Redo by whole pen gesture, with Ctrl/Cmd+Z and Ctrl+Y shortcuts
 - Colors, eraser and brush sizes
+- Live 👍/👎 feedback for each drawing (one changeable reaction per spectator/guesser, reset each turn)
+- Vote-kick in the leaderboard: at least 3 connected players, then two-thirds of other online players (minimum 2 distinct votes) to remove someone
 - Secret words, drawing turns, hints, scoring, leaderboard and chat
 - Host controls, automatic turn timers, reconnect and mobile layout
 
@@ -38,7 +40,7 @@ Manual setup: New → Web Service → repo `Flanxiyum001/Skribbl`, branch `main`
 
 - Free Render web services spin down after about **15 minutes without inbound traffic**. A sleeping service can take time to wake up.
 - Rooms and scores are stored **in memory only**. Server restarts, spin-down, or redeployment reset them.
-- This is a hobby multiplayer server, not a permanent database or a moderation-equipped public service.
+- This is a hobby multiplayer server with room-local vote-kick, not a permanent database or a full account-based moderation service. Voted-out session tokens cannot rejoin that room, but without accounts a person can create a fresh session.
 - A public HTTPS domain does **not** guarantee access through an employer firewall; follow your office's acceptable-use policy.
 
 ## Tests
